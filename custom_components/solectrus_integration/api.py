@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 # HTTP status codes
 _HTTP_UNAUTHORIZED = 401
 _HTTP_FORBIDDEN = 403
+_HTTP_NOT_FOUND = 404
 
 
 class SolectrusInfluxError(Exception):
@@ -50,26 +51,48 @@ class SolectrusInfluxClient:
         self._verify_ssl = bool(verify_ssl) and self._ssl
 
     async def async_validate_connection(self) -> None:
-        """Validate connectivity, auth, and bucket access."""
+        """Validate connectivity, auth, and write access."""
         client = await self._ensure_client()
         loop = asyncio.get_running_loop()
+
+        # Verify basic connectivity (no auth required)
         try:
-            bucket = await loop.run_in_executor(
-                None, lambda: client.buckets_api().find_bucket_by_name(self._bucket)
+            reachable = await loop.run_in_executor(None, client.ping)
+        except (HTTPError, OSError) as err:
+            msg = f"Connection failed: {err}"
+            raise SolectrusConnectionError(msg) from err
+
+        if not reachable:
+            msg = "InfluxDB server is not reachable"
+            raise SolectrusConnectionError(msg)
+
+        # Validate write access by writing a test point
+        write_api = await loop.run_in_executor(
+            None, lambda: client.write_api(write_options=SYNCHRONOUS)
+        )
+        ok = True
+        point = Point("_solectrus_test").field("ok", ok)
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: write_api.write(
+                    bucket=self._bucket,
+                    org=self._org,
+                    record=point,
+                ),
             )
         except ApiException as err:
             if err.status in (_HTTP_UNAUTHORIZED, _HTTP_FORBIDDEN):
                 msg = "Invalid token or insufficient permissions"
                 raise SolectrusAuthError(msg) from err
+            if err.status == _HTTP_NOT_FOUND:
+                msg = "Bucket not found"
+                raise SolectrusInfluxError(msg) from err
             msg = f"API error: {err}"
             raise SolectrusInfluxError(msg) from err
         except (HTTPError, OSError) as err:
             msg = f"Connection failed: {err}"
             raise SolectrusConnectionError(msg) from err
-
-        if bucket is None:
-            msg = "Bucket not found or token lacks permission"
-            raise SolectrusInfluxError(msg)
 
     async def async_connect(self) -> None:
         """Prepare the write API."""

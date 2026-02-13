@@ -15,9 +15,7 @@ This custom integration forwards Home Assistant entity values into an InfluxDB b
 
 - Home Assistant `2024.6` or newer
 - InfluxDB 2.x reachable from Home Assistant (URL + org + bucket + token)
-- An InfluxDB token that can:
-  - read bucket metadata (bucket lookup during setup)
-  - write data into the target bucket
+- An InfluxDB token with **write** access to the target bucket (read permissions are not required)
 
 ## Installation
 
@@ -37,7 +35,7 @@ This custom integration forwards Home Assistant entity values into an InfluxDB b
 
 1. Ensure the integration is installed (see **Installation** above).
 2. Go to **Settings → Devices & services → Add integration** and search for **SOLECTRUS**.
-3. Enter your InfluxDB connection details (URL, token, org, bucket). The integration validates access by looking up the bucket.
+3. Enter your InfluxDB connection details (URL, token, org, bucket). The integration validates access by writing a test point.
 4. Open the integration **Options** and map the SOLECTRUS sensor keys to the Home Assistant entities you want to forward.
 
 Notes:
@@ -68,6 +66,6 @@ Once configured, the integration listens for entity state changes and writes the
 
 ## Troubleshooting
 
-- **Setup error “Bucket not found or token lacks permission to read it”**: ensure the bucket exists and the token has permission to read bucket metadata (not only write).
+- **Setup error "Bucket not found"**: ensure the bucket exists and the token has write access to it.
 - **TLS/certificate errors**: `https://` connections verify certificates; use a valid cert/CA, use `http://` for local non-TLS InfluxDB, or disable **Verify SSL certificate** (insecure).
 - **`field type conflict` in InfluxDB**: set the matching **Data type** in **Advanced options** to the field's existing type.
