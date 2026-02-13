@@ -64,6 +64,15 @@ If the incoming Home Assistant state cannot be converted to the selected type, i
 
 Once configured, the integration listens for entity state changes and writes them to InfluxDB following the above rules.
 
+## Development
+
+```bash
+scripts/setup    # Install/update dependencies into .venv
+scripts/test     # Run the test suite (supports pytest args, e.g. scripts/test -v)
+scripts/lint     # Format and lint the codebase with ruff
+scripts/develop  # Start Home Assistant with the integration loaded
+```
+
 ## Troubleshooting
 
 - **Setup error "Bucket not found"**: ensure the bucket exists and the token has write access to it.
