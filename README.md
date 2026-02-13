@@ -1,6 +1,6 @@
 # SOLECTRUS Home Assistant Integration
 
-**Warning:** This repository is experimental and unsupported; do not use it in production.
+**Note:** This integration is in an early stage of development. Please report any issues you encounter.
 
 This custom integration forwards Home Assistant entity values into an InfluxDB bucket used by your SOLECTRUS instance. It is tailored for the SOLECTRUS sensor keys so you can map each one to a Home Assistant entity, optionally overriding measurement and field names.
 
