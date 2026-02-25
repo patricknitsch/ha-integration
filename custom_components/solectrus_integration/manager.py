@@ -23,6 +23,7 @@ from .const import FORECAST_SENSOR_KEYS, LOGGER
 BATCH_INTERVAL = timedelta(seconds=5)
 HEARTBEAT_INTERVAL = timedelta(minutes=5)
 GAP_FILL_ZERO_RESUME_THRESHOLD = timedelta(seconds=30)
+MAX_PENDING_POINTS = 10_000
 
 BOOL_STRING_MAP: dict[str, bool] = {
     "on": True,
@@ -225,13 +226,17 @@ class SensorManager:
             return
 
         normalized_timestamp = self._normalize_timestamp(timestamp or dt_util.utcnow())
-        self._pending[
-            pending_key or f"{sensor.key}:{normalized_timestamp.isoformat()}"
-        ] = PendingPoint(
+        key = pending_key or f"{sensor.key}:{normalized_timestamp.isoformat()}"
+        self._pending[key] = PendingPoint(
             sensor=sensor,
             value=coerced,
             timestamp=normalized_timestamp,
         )
+
+        # Evict oldest entry when buffer is full.
+        if len(self._pending) > MAX_PENDING_POINTS:
+            oldest_key = min(self._pending, key=lambda k: self._pending[k].timestamp)
+            del self._pending[oldest_key]
 
     async def _queue_forecast_points(
         self,
@@ -354,9 +359,9 @@ class SensorManager:
             for key, item in pending.items():
                 self._pending.setdefault(key, item)
             LOGGER.debug(
-                "Influx batch write failed; keeping points for retry: %s",
+                "Influx batch write failed; keeping %d points for retry: %s",
+                len(self._pending),
                 err,
-                exc_info=True,
             )
 
     @staticmethod
