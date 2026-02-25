@@ -1,9 +1,9 @@
 {
   "domain": "solectrus_integration",
   "name": "SOLECTRUS",
+  "after_dependencies": ["weather"],
   "codeowners": ["@solectrus"],
   "config_flow": true,
-  "after_dependencies": ["weather"],
   "dependencies": [],
   "documentation": "https://github.com/solectrus/ha-integration",
   "integration_type": "service",
