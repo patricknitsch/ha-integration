@@ -46,45 +46,67 @@ class SensorDefinition:
     measurement: str
     field: str
     data_type: str
+    min_value: float | None = None
+    max_value: float | None = None
 
 
 SENSOR_DEFINITIONS: dict[str, SensorDefinition] = {
-    "INVERTER_POWER": SensorDefinition("inverter", "power", DATA_TYPE_INT),
-    "INVERTER_POWER_1": SensorDefinition("inverter_1", "power", DATA_TYPE_INT),
-    "INVERTER_POWER_2": SensorDefinition("inverter_2", "power", DATA_TYPE_INT),
-    "INVERTER_POWER_3": SensorDefinition("inverter_3", "power", DATA_TYPE_INT),
-    "INVERTER_POWER_4": SensorDefinition("inverter_4", "power", DATA_TYPE_INT),
-    "INVERTER_POWER_5": SensorDefinition("inverter_5", "power", DATA_TYPE_INT),
+    "INVERTER_POWER": SensorDefinition("inverter", "power", DATA_TYPE_INT, min_value=0),
+    "INVERTER_POWER_1": SensorDefinition(
+        "inverter_1", "power", DATA_TYPE_INT, min_value=0
+    ),
+    "INVERTER_POWER_2": SensorDefinition(
+        "inverter_2", "power", DATA_TYPE_INT, min_value=0
+    ),
+    "INVERTER_POWER_3": SensorDefinition(
+        "inverter_3", "power", DATA_TYPE_INT, min_value=0
+    ),
+    "INVERTER_POWER_4": SensorDefinition(
+        "inverter_4", "power", DATA_TYPE_INT, min_value=0
+    ),
+    "INVERTER_POWER_5": SensorDefinition(
+        "inverter_5", "power", DATA_TYPE_INT, min_value=0
+    ),
     "INVERTER_POWER_FORECAST": SensorDefinition(
-        "inverter_forecast", "power", DATA_TYPE_INT
+        "inverter_forecast", "power", DATA_TYPE_INT, min_value=0
     ),
     "INVERTER_POWER_FORECAST_CLEARSKY": SensorDefinition(
-        "inverter_forecast_clearsky", "power", DATA_TYPE_INT
+        "inverter_forecast_clearsky", "power", DATA_TYPE_INT, min_value=0
     ),
-    "HOUSE_POWER": SensorDefinition("house", "power", DATA_TYPE_INT),
-    "BATTERY_SOC": SensorDefinition("battery", "soc", DATA_TYPE_FLOAT),
+    "HOUSE_POWER": SensorDefinition("house", "power", DATA_TYPE_INT, min_value=0),
+    "BATTERY_SOC": SensorDefinition(
+        "battery", "soc", DATA_TYPE_FLOAT, min_value=0, max_value=100
+    ),
     "BATTERY_CHARGING_POWER": SensorDefinition(
-        "battery", "charging_power", DATA_TYPE_INT
+        "battery", "charging_power", DATA_TYPE_INT, min_value=0
     ),
     "BATTERY_DISCHARGING_POWER": SensorDefinition(
-        "battery", "discharging_power", DATA_TYPE_INT
+        "battery", "discharging_power", DATA_TYPE_INT, min_value=0
     ),
-    "HEATPUMP_POWER": SensorDefinition("heatpump", "power", DATA_TYPE_INT),
+    "HEATPUMP_POWER": SensorDefinition("heatpump", "power", DATA_TYPE_INT, min_value=0),
     "HEATPUMP_HEATING_POWER": SensorDefinition(
-        "heatpump", "heating_power", DATA_TYPE_INT
+        "heatpump", "heating_power", DATA_TYPE_INT, min_value=0
     ),
     "HEATPUMP_TANK_TEMP": SensorDefinition("heatpump", "tank_temp", DATA_TYPE_FLOAT),
     "HEATPUMP_STATUS": SensorDefinition("heatpump", "status", DATA_TYPE_STRING),
     "OUTDOOR_TEMP_FORECAST": SensorDefinition(
         "outdoor_forecast", "temperature", DATA_TYPE_FLOAT
     ),
-    "GRID_EXPORT_POWER": SensorDefinition("grid", "export_power", DATA_TYPE_INT),
-    "GRID_EXPORT_LIMIT": SensorDefinition("grid", "export_limit", DATA_TYPE_INT),
-    "GRID_IMPORT_POWER": SensorDefinition("grid", "import_power", DATA_TYPE_INT),
-    "WALLBOX_POWER": SensorDefinition("wallbox", "power", DATA_TYPE_INT),
+    "GRID_EXPORT_POWER": SensorDefinition(
+        "grid", "export_power", DATA_TYPE_INT, min_value=0
+    ),
+    "GRID_EXPORT_LIMIT": SensorDefinition(
+        "grid", "export_limit", DATA_TYPE_INT, min_value=0
+    ),
+    "GRID_IMPORT_POWER": SensorDefinition(
+        "grid", "import_power", DATA_TYPE_INT, min_value=0
+    ),
+    "WALLBOX_POWER": SensorDefinition("wallbox", "power", DATA_TYPE_INT, min_value=0),
     "WALLBOX_CONNECTED": SensorDefinition("wallbox", "connected", DATA_TYPE_BOOL),
     "CASE_TEMP": SensorDefinition("case", "temperature", DATA_TYPE_FLOAT),
-    "CAR_BATTERY_SOC": SensorDefinition("car", "battery_soc", DATA_TYPE_FLOAT),
+    "CAR_BATTERY_SOC": SensorDefinition(
+        "car", "battery_soc", DATA_TYPE_FLOAT, min_value=0, max_value=100
+    ),
     "OUTDOOR_TEMP": SensorDefinition("outdoor", "temperature", DATA_TYPE_FLOAT),
     "SYSTEM_STATUS": SensorDefinition("system", "status", DATA_TYPE_STRING),
     "SYSTEM_STATUS_OK": SensorDefinition("system", "status_ok", DATA_TYPE_BOOL),
@@ -93,5 +115,5 @@ SENSOR_DEFINITIONS: dict[str, SensorDefinition] = {
 for index in range(1, 21):
     key = f"CUSTOM_{index:02d}"
     SENSOR_DEFINITIONS[key] = SensorDefinition(
-        f"custom_{index:02d}", "power", DATA_TYPE_INT
+        f"custom_{index:02d}", "power", DATA_TYPE_INT, min_value=0
     )

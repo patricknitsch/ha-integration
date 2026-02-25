@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,20 +20,15 @@ from custom_components.solectrus_integration.manager import (
 FIXED_NOW = datetime(2024, 6, 15, 12, 0, 0, tzinfo=UTC)
 
 
-def _sensor(
-    key="INVERTER_POWER",
-    entity_id="sensor.inverter_power",
-    measurement="inverter",
-    field="power",
-    data_type="int",
-) -> ConfiguredSensor:
-    return ConfiguredSensor(
-        key=key,
-        entity_id=entity_id,
-        measurement=measurement,
-        field=field,
-        data_type=data_type,
-    )
+def _sensor(**overrides) -> ConfiguredSensor:
+    defaults = {
+        "key": "INVERTER_POWER",
+        "entity_id": "sensor.inverter_power",
+        "measurement": "inverter",
+        "field": "power",
+        "data_type": "int",
+    }
+    return ConfiguredSensor(**{**defaults, **overrides})
 
 
 def _manager(sensors=None, client=None) -> SensorManager:
@@ -608,3 +604,110 @@ class TestWeatherTemperatureSeries:
         result = await mgr._weather_temperature_series("weather.home")
 
         assert result == []
+
+
+class TestValueRangeValidation:
+    """Tests for out-of-range value rejection in _queue_point."""
+
+    def test_negative_power_discarded(self):
+        sensor = _sensor(min_value=0)
+        mgr = _manager([sensor])
+
+        mgr._queue_point(sensor, -100, timestamp=FIXED_NOW)
+
+        assert len(mgr._pending) == 0
+
+    def test_zero_power_accepted(self):
+        sensor = _sensor(min_value=0)
+        mgr = _manager([sensor])
+
+        mgr._queue_point(sensor, 0, timestamp=FIXED_NOW)
+
+        assert len(mgr._pending) == 1
+
+    def test_positive_power_accepted(self):
+        sensor = _sensor(min_value=0)
+        mgr = _manager([sensor])
+
+        mgr._queue_point(sensor, 1500, timestamp=FIXED_NOW)
+
+        assert len(mgr._pending) == 1
+        point = next(iter(mgr._pending.values()))
+        assert point.value == 1500
+
+    def test_soc_above_100_discarded(self):
+        sensor = _sensor(
+            key="BATTERY_SOC",
+            entity_id="sensor.battery_soc",
+            measurement="battery",
+            field="soc",
+            data_type="float",
+            min_value=0,
+            max_value=100,
+        )
+        mgr = _manager([sensor])
+
+        mgr._queue_point(sensor, 105.0, timestamp=FIXED_NOW)
+
+        assert len(mgr._pending) == 0
+
+    def test_soc_below_zero_discarded(self):
+        sensor = _sensor(
+            key="BATTERY_SOC",
+            entity_id="sensor.battery_soc",
+            measurement="battery",
+            field="soc",
+            data_type="float",
+            min_value=0,
+            max_value=100,
+        )
+        mgr = _manager([sensor])
+
+        mgr._queue_point(sensor, -1.0, timestamp=FIXED_NOW)
+
+        assert len(mgr._pending) == 0
+
+    def test_soc_in_range_accepted(self):
+        sensor = _sensor(
+            key="BATTERY_SOC",
+            entity_id="sensor.battery_soc",
+            measurement="battery",
+            field="soc",
+            data_type="float",
+            min_value=0,
+            max_value=100,
+        )
+        mgr = _manager([sensor])
+
+        mgr._queue_point(sensor, 75.5, timestamp=FIXED_NOW)
+
+        assert len(mgr._pending) == 1
+
+    def test_sensor_without_limits_accepts_negative(self):
+        sensor = _sensor(
+            key="OUTDOOR_TEMP",
+            entity_id="sensor.outdoor_temp",
+            measurement="outdoor",
+            field="temperature",
+            data_type="float",
+        )
+        mgr = _manager([sensor])
+
+        mgr._queue_point(sensor, -10.5, timestamp=FIXED_NOW)
+
+        assert len(mgr._pending) == 1
+        point = next(iter(mgr._pending.values()))
+        assert point.value == -10.5
+
+    def test_warning_logged_once_per_sensor(self, caplog):
+        sensor = _sensor(min_value=0)
+        mgr = _manager([sensor])
+
+        with caplog.at_level(logging.WARNING):
+            mgr._queue_point(sensor, -100, timestamp=FIXED_NOW)
+            mgr._queue_point(sensor, -200, timestamp=FIXED_NOW + timedelta(seconds=5))
+
+        warning_messages = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warning_messages) == 1
+        assert "out of range" in warning_messages[0].message
+        assert sensor.entity_id in warning_messages[0].message

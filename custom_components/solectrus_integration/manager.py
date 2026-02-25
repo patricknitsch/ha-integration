@@ -57,6 +57,8 @@ class ConfiguredSensor:
     measurement: str
     field: str
     data_type: str
+    min_value: float | None = None
+    max_value: float | None = None
     last_value: Any | None = None
     last_timestamp: datetime | None = None
 
@@ -87,6 +89,7 @@ class SensorManager:
         self._unsub_batch = None
         self._unsub_heartbeat = None
         self._pending: dict[str, PendingPoint] = {}
+        self._warned_out_of_range: set[str] = set()
 
     async def async_start(self) -> None:
         """Start listening for state updates."""
@@ -224,6 +227,22 @@ class SensorManager:
         coerced = self._coerce_value(value, sensor.data_type)
         if coerced is None:
             return
+
+        if isinstance(coerced, (int, float)):
+            below = sensor.min_value is not None and coerced < sensor.min_value
+            above = sensor.max_value is not None and coerced > sensor.max_value
+            if below or above:
+                if sensor.key not in self._warned_out_of_range:
+                    LOGGER.warning(
+                        "Value %s from %s is out of range (%s..%s), discarded; "
+                        "check the sensor configuration in Home Assistant",
+                        coerced,
+                        sensor.entity_id,
+                        sensor.min_value if sensor.min_value is not None else "",
+                        sensor.max_value if sensor.max_value is not None else "",
+                    )
+                    self._warned_out_of_range.add(sensor.key)
+                return
 
         normalized_timestamp = self._normalize_timestamp(timestamp or dt_util.utcnow())
         key = pending_key or f"{sensor.key}:{normalized_timestamp.isoformat()}"

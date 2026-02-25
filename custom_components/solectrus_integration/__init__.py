@@ -105,6 +105,8 @@ def _build_sensor_map(entry: SolectrusConfigEntry) -> dict[str, ConfiguredSensor
             measurement=measurement,
             field=field,
             data_type=data_type,
+            min_value=defaults.min_value if defaults else None,
+            max_value=defaults.max_value if defaults else None,
         )
 
     return sensors
