@@ -33,5 +33,6 @@ jobs:
         uses: hacs/action@main
         with:
           category: integration
-          # Remove this 'ignore' key when you have added brand images for your integration to https://github.com/home-assistant/brands
+          # Remove this 'ignore' key when the brand images PR has been merged:
+          # https://github.com/home-assistant/brands/pull/9850
           ignore: brands
