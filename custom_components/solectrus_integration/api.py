@@ -88,10 +88,10 @@ class SolectrusInfluxClient:
             if err.status == _HTTP_NOT_FOUND:
                 msg = "Bucket not found"
                 raise SolectrusInfluxError(msg) from err
-            msg = f"API error: {err}"
+            msg = f"API error (HTTP {err.status})"
             raise SolectrusInfluxError(msg) from err
         except (HTTPError, OSError) as err:
-            msg = f"Connection failed: {err}"
+            msg = f"Connection failed: {type(err).__name__}"
             raise SolectrusConnectionError(msg) from err
 
     async def async_connect(self) -> None:
@@ -131,14 +131,9 @@ class SolectrusInfluxClient:
                 ),
             )
         except ApiException as err:
-            if err.status == _HTTP_UNAUTHORIZED:
-                LOGGER.error("InfluxDB authentication failed")
-                raise SolectrusAuthError("Authentication failed") from err
-            LOGGER.error("InfluxDB API error: %s", err)
-            raise SolectrusInfluxError(f"API error: {err}") from err
+            self._handle_api_exception(err)
         except (HTTPError, OSError) as err:
-            LOGGER.warning("InfluxDB connection failed: %s", err)
-            raise SolectrusConnectionError(f"Connection failed: {err}") from err
+            self._handle_connection_exception(err)
 
     async def async_write_batch(self, points: list[Point]) -> None:
         """Write multiple points to InfluxDB in a single request."""
@@ -160,14 +155,26 @@ class SolectrusInfluxClient:
                 ),
             )
         except ApiException as err:
-            if err.status == _HTTP_UNAUTHORIZED:
-                LOGGER.error("InfluxDB authentication failed")
-                raise SolectrusAuthError("Authentication failed") from err
-            LOGGER.error("InfluxDB API error: %s", err)
-            raise SolectrusInfluxError(f"API error: {err}") from err
+            self._handle_api_exception(err)
         except (HTTPError, OSError) as err:
-            LOGGER.warning("InfluxDB connection failed: %s", err)
-            raise SolectrusConnectionError(f"Connection failed: {err}") from err
+            self._handle_connection_exception(err)
+
+    @staticmethod
+    def _handle_api_exception(err: ApiException) -> None:
+        """Translate InfluxDB API errors into domain exceptions."""
+        if err.status in (_HTTP_UNAUTHORIZED, _HTTP_FORBIDDEN):
+            LOGGER.error("InfluxDB authentication failed (HTTP %s)", err.status)
+            raise SolectrusAuthError("Authentication failed") from err
+        LOGGER.error("InfluxDB API error (HTTP %s)", err.status)
+        raise SolectrusInfluxError(f"API error (HTTP {err.status})") from err
+
+    @staticmethod
+    def _handle_connection_exception(err: HTTPError | OSError) -> None:
+        """Translate network errors into domain exceptions."""
+        LOGGER.warning("InfluxDB connection failed: %s", type(err).__name__)
+        raise SolectrusConnectionError(
+            f"Connection failed: {type(err).__name__}"
+        ) from err
 
     async def async_close(self) -> None:
         """Close the client."""
