@@ -1,0 +1,610 @@
+"""Behavior tests for SensorManager: queue, flush, heartbeat, state changes."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from influxdb_client import Point
+
+from custom_components.solectrus_integration.api import SolectrusInfluxError
+from custom_components.solectrus_integration.manager import (
+    MAX_PENDING_POINTS,
+    ConfiguredSensor,
+    PendingPoint,
+    SensorManager,
+)
+
+FIXED_NOW = datetime(2024, 6, 15, 12, 0, 0, tzinfo=UTC)
+
+
+def _sensor(
+    key="INVERTER_POWER",
+    entity_id="sensor.inverter_power",
+    measurement="inverter",
+    field="power",
+    data_type="int",
+) -> ConfiguredSensor:
+    return ConfiguredSensor(
+        key=key,
+        entity_id=entity_id,
+        measurement=measurement,
+        field=field,
+        data_type=data_type,
+    )
+
+
+def _manager(sensors=None, client=None) -> SensorManager:
+    hass = MagicMock()
+    if client is None:
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+    sensor_map = {}
+    if sensors:
+        for s in sensors:
+            sensor_map[s.entity_id] = s
+    return SensorManager(hass, client, sensor_map)
+
+
+class TestQueuePoint:
+    """Tests for _queue_point."""
+
+    def test_adds_point_to_pending(self):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+
+        mgr._queue_point(sensor, 1500, timestamp=FIXED_NOW)
+
+        assert len(mgr._pending) == 1
+        key = f"INVERTER_POWER:{FIXED_NOW.isoformat()}"
+        assert key in mgr._pending
+        assert mgr._pending[key].value == 1500
+
+    def test_overwrites_same_key(self):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+
+        mgr._queue_point(sensor, 1500, timestamp=FIXED_NOW)
+        mgr._queue_point(sensor, 2000, timestamp=FIXED_NOW)
+
+        assert len(mgr._pending) == 1
+        key = f"INVERTER_POWER:{FIXED_NOW.isoformat()}"
+        assert mgr._pending[key].value == 2000
+
+    def test_custom_pending_key(self):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+
+        mgr._queue_point(sensor, 100, timestamp=FIXED_NOW, pending_key="custom:key")
+
+        assert "custom:key" in mgr._pending
+
+    def test_coerces_value(self):
+        sensor = _sensor(data_type="float")
+        mgr = _manager([sensor])
+
+        mgr._queue_point(sensor, "3.14", timestamp=FIXED_NOW)
+
+        point = next(iter(mgr._pending.values()))
+        assert point.value == 3.14
+
+    def test_skips_invalid_value(self):
+        sensor = _sensor(data_type="int")
+        mgr = _manager([sensor])
+
+        mgr._queue_point(sensor, "not_a_number", timestamp=FIXED_NOW)
+
+        assert len(mgr._pending) == 0
+
+    def test_eviction_removes_oldest(self):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+
+        # Fill buffer to MAX_PENDING_POINTS
+        base = FIXED_NOW
+        for i in range(MAX_PENDING_POINTS):
+            ts = base + timedelta(seconds=i)
+            mgr._pending[f"key:{i}"] = PendingPoint(
+                sensor=sensor, value=i, timestamp=ts
+            )
+
+        assert len(mgr._pending) == MAX_PENDING_POINTS
+
+        # Adding a new point should evict the oldest (key:0)
+        new_ts = base + timedelta(seconds=MAX_PENDING_POINTS)
+        mgr._queue_point(sensor, 9999, timestamp=new_ts)
+
+        assert len(mgr._pending) == MAX_PENDING_POINTS
+        assert "key:0" not in mgr._pending
+
+    def test_overwrite_does_not_evict(self):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+
+        base = FIXED_NOW
+        for i in range(MAX_PENDING_POINTS):
+            ts = base + timedelta(seconds=i)
+            mgr._pending[f"INVERTER_POWER:{ts.isoformat()}"] = PendingPoint(
+                sensor=sensor, value=i, timestamp=ts
+            )
+
+        # Overwriting an existing key should NOT trigger eviction
+        first_ts = base
+        mgr._queue_point(sensor, 9999, timestamp=first_ts)
+
+        assert len(mgr._pending) == MAX_PENDING_POINTS
+
+    def test_new_point_not_self_evicted(self):
+        """A point with an old timestamp should not evict itself."""
+        sensor = _sensor()
+        mgr = _manager([sensor])
+
+        # Fill with points all at a later time
+        future = FIXED_NOW + timedelta(hours=1)
+        for i in range(MAX_PENDING_POINTS):
+            ts = future + timedelta(seconds=i)
+            mgr._pending[f"key:{i}"] = PendingPoint(
+                sensor=sensor, value=i, timestamp=ts
+            )
+
+        # Add a point with a timestamp OLDER than all existing ones
+        old_ts = FIXED_NOW
+        mgr._queue_point(sensor, 42, timestamp=old_ts)
+
+        # The new point should be present (not self-evicted)
+        new_key = f"INVERTER_POWER:{old_ts.isoformat()}"
+        assert new_key in mgr._pending
+        assert mgr._pending[new_key].value == 42
+
+
+class TestFlushBatch:
+    """Tests for _flush_batch."""
+
+    @pytest.mark.asyncio
+    async def test_sends_all_pending_points(self):
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+        sensor = _sensor()
+        mgr = _manager([sensor], client=client)
+
+        mgr._queue_point(sensor, 1500, timestamp=FIXED_NOW)
+        mgr._queue_point(sensor, 2000, timestamp=FIXED_NOW + timedelta(seconds=5))
+
+        await mgr._flush_batch(FIXED_NOW)
+
+        client.async_write_batch.assert_awaited_once()
+        points = client.async_write_batch.call_args[0][0]
+        assert len(points) == 2
+        assert all(isinstance(p, Point) for p in points)
+        assert mgr._pending == {}
+
+    @pytest.mark.asyncio
+    async def test_noop_when_empty(self):
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+        mgr = _manager(client=client)
+
+        await mgr._flush_batch(FIXED_NOW)
+
+        client.async_write_batch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_retry_on_error(self):
+        client = MagicMock()
+        client.async_write_batch = AsyncMock(
+            side_effect=SolectrusInfluxError("write failed")
+        )
+        sensor = _sensor()
+        mgr = _manager([sensor], client=client)
+
+        mgr._queue_point(sensor, 1500, timestamp=FIXED_NOW)
+
+        await mgr._flush_batch(FIXED_NOW)
+
+        # Points should be re-queued for retry
+        assert len(mgr._pending) == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_preserves_newer_values(self):
+        """Newer values queued during a failed write are preserved over old ones."""
+        client = MagicMock()
+        sensor = _sensor()
+        mgr = _manager([sensor], client=client)
+
+        ts = FIXED_NOW
+        key = f"INVERTER_POWER:{ts.isoformat()}"
+        mgr._queue_point(sensor, 1500, timestamp=ts)
+
+        async def write_side_effect(_points):
+            # Simulate a new point arriving during the write
+            mgr._pending[key] = PendingPoint(sensor=sensor, value=2000, timestamp=ts)
+            raise SolectrusInfluxError("write failed")
+
+        client.async_write_batch = AsyncMock(side_effect=write_side_effect)
+
+        await mgr._flush_batch(FIXED_NOW)
+
+        # The newer value (2000) should be preserved, not overwritten by the old (1500)
+        assert mgr._pending[key].value == 2000
+
+
+class TestHandleStateChange:
+    """Tests for _handle_state_change."""
+
+    def _make_event(self, entity_id, new_state_value, last_updated=None):
+        """Create a mock state change event."""
+        if last_updated is None:
+            last_updated = FIXED_NOW
+
+        new_state = MagicMock()
+        new_state.state = str(new_state_value)
+        new_state.attributes = {}
+        new_state.last_updated = last_updated
+
+        event = MagicMock()
+        event.data = {"entity_id": entity_id, "new_state": new_state}
+        return event
+
+    @pytest.mark.asyncio
+    async def test_queues_point_for_known_sensor(self):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+
+        event = self._make_event("sensor.inverter_power", 1500)
+        await mgr._handle_state_change(event)
+
+        assert len(mgr._pending) == 1
+        point = next(iter(mgr._pending.values()))
+        assert point.value == 1500
+
+    @pytest.mark.asyncio
+    async def test_ignores_unknown_entity(self):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+
+        event = self._make_event("sensor.unknown", 42)
+        await mgr._handle_state_change(event)
+
+        assert len(mgr._pending) == 0
+
+    @pytest.mark.asyncio
+    async def test_ignores_unavailable_state(self):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+
+        event = self._make_event("sensor.inverter_power", "unavailable")
+        await mgr._handle_state_change(event)
+
+        assert len(mgr._pending) == 0
+
+    @pytest.mark.asyncio
+    async def test_skips_duplicate_value_and_timestamp(self):
+        sensor = _sensor()
+        sensor.last_value = 1500
+        sensor.last_timestamp = FIXED_NOW
+        mgr = _manager([sensor])
+
+        event = self._make_event("sensor.inverter_power", 1500, last_updated=FIXED_NOW)
+        await mgr._handle_state_change(event)
+
+        assert len(mgr._pending) == 0
+
+    @pytest.mark.asyncio
+    async def test_queues_when_value_changes(self):
+        sensor = _sensor()
+        sensor.last_value = 1500
+        sensor.last_timestamp = FIXED_NOW
+        mgr = _manager([sensor])
+
+        event = self._make_event("sensor.inverter_power", 2000, last_updated=FIXED_NOW)
+        await mgr._handle_state_change(event)
+
+        assert len(mgr._pending) == 1
+
+    @pytest.mark.asyncio
+    async def test_queues_when_timestamp_changes(self):
+        sensor = _sensor()
+        sensor.last_value = 1500
+        sensor.last_timestamp = FIXED_NOW
+        mgr = _manager([sensor])
+
+        new_ts = FIXED_NOW + timedelta(seconds=5)
+        event = self._make_event("sensor.inverter_power", 1500, last_updated=new_ts)
+        await mgr._handle_state_change(event)
+
+        assert len(mgr._pending) == 1
+
+    @pytest.mark.asyncio
+    async def test_updates_last_value_and_timestamp(self):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+
+        event = self._make_event("sensor.inverter_power", 1500, last_updated=FIXED_NOW)
+        await mgr._handle_state_change(event)
+
+        assert sensor.last_value == 1500
+        assert sensor.last_timestamp == FIXED_NOW
+
+    @pytest.mark.asyncio
+    async def test_gap_fill_inserts_zero_before_resume(self):
+        sensor = _sensor()
+        sensor.last_value = 0
+        sensor.last_timestamp = FIXED_NOW - timedelta(minutes=5)
+        mgr = _manager([sensor])
+
+        new_ts = FIXED_NOW
+        event = self._make_event("sensor.inverter_power", 1500, last_updated=new_ts)
+        await mgr._handle_state_change(event)
+
+        # Should have 2 points: gap-fill zero at ts-1s, and actual value
+        assert len(mgr._pending) == 2
+        points = sorted(mgr._pending.values(), key=lambda p: p.timestamp)
+        assert points[0].value == 0
+        assert points[0].timestamp == FIXED_NOW - timedelta(seconds=1)
+        assert points[1].value == 1500
+        assert points[1].timestamp == FIXED_NOW
+
+    @pytest.mark.asyncio
+    async def test_no_gap_fill_for_short_gap(self):
+        sensor = _sensor()
+        sensor.last_value = 0
+        sensor.last_timestamp = FIXED_NOW - timedelta(seconds=10)
+        mgr = _manager([sensor])
+
+        event = self._make_event("sensor.inverter_power", 1500, last_updated=FIXED_NOW)
+        await mgr._handle_state_change(event)
+
+        # Short gap: only 1 point, no gap-fill
+        assert len(mgr._pending) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_gap_fill_when_last_value_nonzero(self):
+        sensor = _sensor()
+        sensor.last_value = 500
+        sensor.last_timestamp = FIXED_NOW - timedelta(minutes=5)
+        mgr = _manager([sensor])
+
+        event = self._make_event("sensor.inverter_power", 1500, last_updated=FIXED_NOW)
+        await mgr._handle_state_change(event)
+
+        assert len(mgr._pending) == 1
+
+    @pytest.mark.asyncio
+    async def test_forecast_sensor_delegates(self):
+        sensor = _sensor(key="INVERTER_POWER_FORECAST", entity_id="sensor.forecast")
+        mgr = _manager([sensor])
+
+        new_state = MagicMock()
+        new_state.attributes = {
+            "forecast": [
+                {"datetime": "2024-06-15T13:00:00+00:00", "power": 1500},
+                {"datetime": "2024-06-15T14:00:00+00:00", "power": 1800},
+            ]
+        }
+
+        event = MagicMock()
+        event.data = {"entity_id": "sensor.forecast", "new_state": new_state}
+
+        await mgr._handle_state_change(event)
+
+        assert len(mgr._pending) == 2
+
+
+class TestHeartbeat:
+    """Tests for _heartbeat."""
+
+    def test_requeues_current_values(self):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+
+        mock_state = MagicMock()
+        mock_state.state = "1500"
+        mock_state.attributes = {}
+        mock_state.last_updated = FIXED_NOW
+        mgr._hass.states.get.return_value = mock_state
+
+        with patch(
+            "custom_components.solectrus_integration.manager.dt_util.utcnow",
+            return_value=FIXED_NOW,
+        ):
+            mgr._heartbeat(FIXED_NOW)
+
+        assert len(mgr._pending) == 1
+        point = next(iter(mgr._pending.values()))
+        assert point.value == 1500
+        assert sensor.last_value == 1500
+
+    def test_skips_unavailable_sensors(self):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+
+        mock_state = MagicMock()
+        mock_state.state = "unavailable"
+        mgr._hass.states.get.return_value = mock_state
+
+        with patch(
+            "custom_components.solectrus_integration.manager.dt_util.utcnow",
+            return_value=FIXED_NOW,
+        ):
+            mgr._heartbeat(FIXED_NOW)
+
+        assert len(mgr._pending) == 0
+
+    def test_skips_forecast_sensors(self):
+        sensor = _sensor(key="INVERTER_POWER_FORECAST", entity_id="sensor.forecast")
+        mgr = _manager([sensor])
+        mgr._hass.states.get.return_value = MagicMock(state="1500")
+
+        with patch(
+            "custom_components.solectrus_integration.manager.dt_util.utcnow",
+            return_value=FIXED_NOW,
+        ):
+            mgr._heartbeat(FIXED_NOW)
+
+        assert len(mgr._pending) == 0
+
+    def test_handles_multiple_sensors(self):
+        sensor1 = _sensor(key="INVERTER_POWER", entity_id="sensor.inverter")
+        sensor2 = _sensor(
+            key="HOUSE_POWER",
+            entity_id="sensor.house",
+            measurement="house",
+        )
+        mgr = _manager([sensor1, sensor2])
+
+        def mock_get(entity_id):
+            state = MagicMock()
+            state.state = "1500" if entity_id == "sensor.inverter" else "800"
+            state.attributes = {}
+            state.last_updated = FIXED_NOW
+            return state
+
+        mgr._hass.states.get.side_effect = mock_get
+
+        with patch(
+            "custom_components.solectrus_integration.manager.dt_util.utcnow",
+            return_value=FIXED_NOW,
+        ):
+            mgr._heartbeat(FIXED_NOW)
+
+        assert len(mgr._pending) == 2
+
+
+class TestAsyncStartStop:
+    """Tests for async_start and async_stop."""
+
+    @pytest.mark.asyncio
+    async def test_start_registers_listeners(self):
+        sensor = _sensor()
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+        mgr = _manager([sensor], client=client)
+
+        mock_state = MagicMock()
+        mock_state.state = "unavailable"
+        mgr._hass.states.get.return_value = mock_state
+
+        with (
+            patch(
+                "custom_components.solectrus_integration.manager.async_track_state_change_event"
+            ) as mock_track_state,
+            patch(
+                "custom_components.solectrus_integration.manager.async_track_time_interval"
+            ) as mock_track_time,
+        ):
+            mock_track_state.return_value = MagicMock()
+            mock_track_time.return_value = MagicMock()
+
+            await mgr.async_start()
+
+        mock_track_state.assert_called_once()
+        assert mock_track_time.call_count == 2  # batch + heartbeat
+
+    @pytest.mark.asyncio
+    async def test_stop_unsubscribes_listeners(self):
+        sensor = _sensor()
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+        mgr = _manager([sensor], client=client)
+
+        unsub_state = MagicMock()
+        unsub_batch = MagicMock()
+        unsub_heartbeat = MagicMock()
+        mgr._unsub_state = unsub_state
+        mgr._unsub_batch = unsub_batch
+        mgr._unsub_heartbeat = unsub_heartbeat
+
+        await mgr.async_stop()
+
+        unsub_state.assert_called_once()
+        unsub_batch.assert_called_once()
+        unsub_heartbeat.assert_called_once()
+        assert mgr._unsub_state is None
+        assert mgr._unsub_batch is None
+        assert mgr._unsub_heartbeat is None
+
+    @pytest.mark.asyncio
+    async def test_stop_flushes_remaining_points(self):
+        sensor = _sensor()
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+        mgr = _manager([sensor], client=client)
+
+        mgr._queue_point(sensor, 1500, timestamp=FIXED_NOW)
+
+        await mgr.async_stop()
+
+        client.async_write_batch.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_start_queues_initial_values(self):
+        sensor = _sensor()
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+        mgr = _manager([sensor], client=client)
+
+        mock_state = MagicMock()
+        mock_state.state = "1500"
+        mock_state.attributes = {}
+        mock_state.last_updated = FIXED_NOW
+        mgr._hass.states.get.return_value = mock_state
+
+        with (
+            patch(
+                "custom_components.solectrus_integration.manager.async_track_state_change_event",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.solectrus_integration.manager.async_track_time_interval",
+                return_value=MagicMock(),
+            ),
+        ):
+            await mgr.async_start()
+
+        # Initial values should have been flushed
+        client.async_write_batch.assert_awaited_once()
+        points = client.async_write_batch.call_args[0][0]
+        assert len(points) == 1
+
+
+class TestWeatherTemperatureSeries:
+    """Tests for _weather_temperature_series."""
+
+    @pytest.mark.asyncio
+    async def test_parses_valid_response(self):
+        mgr = _manager()
+        mgr._hass.services.async_call = AsyncMock(
+            return_value={
+                "weather.home": {
+                    "forecast": [
+                        {"datetime": "2024-06-15T12:00:00+00:00", "temperature": 22.5},
+                        {"datetime": "2024-06-15T13:00:00+00:00", "temperature": 23.0},
+                    ]
+                }
+            }
+        )
+
+        result = await mgr._weather_temperature_series("weather.home")
+
+        assert len(result) == 2
+        assert result[0][1] == 22.5
+        assert result[1][1] == 23.0
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_exception(self):
+        mgr = _manager()
+        mgr._hass.services.async_call = AsyncMock(side_effect=RuntimeError("fail"))
+
+        result = await mgr._weather_temperature_series("weather.home")
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_invalid_response(self):
+        mgr = _manager()
+        mgr._hass.services.async_call = AsyncMock(return_value="not a dict")
+
+        result = await mgr._weather_temperature_series("weather.home")
+
+        assert result == []
