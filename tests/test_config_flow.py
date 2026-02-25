@@ -7,15 +7,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import voluptuous as vol
 
-from custom_components.solectrus_integration.api import SolectrusInfluxError
-from custom_components.solectrus_integration.config_flow import (
+from custom_components.solectrus.api import SolectrusInfluxError
+from custom_components.solectrus.config_flow import (
     SolectrusConfigFlow,
     SolectrusOptionsFlowHandler,
     _build_sensors_schema,
     _influx_schema,
     _parse_sensors_input,
 )
-from custom_components.solectrus_integration.const import (
+from custom_components.solectrus.const import (
     CONF_BUCKET,
     CONF_DATA_TYPE,
     CONF_ENTITY_ID,
@@ -261,7 +261,7 @@ class TestConfigFlowStepUser:
         mock_client.async_close = AsyncMock()
 
         with patch(
-            "custom_components.solectrus_integration.config_flow.SolectrusInfluxClient",
+            "custom_components.solectrus.config_flow.SolectrusInfluxClient",
             return_value=mock_client,
         ):
             result = await flow.async_step_user(user_input=dict(VALID_USER_INPUT))
@@ -284,7 +284,7 @@ class TestConfigFlowStepUser:
         mock_client.async_close = AsyncMock()
 
         with patch(
-            "custom_components.solectrus_integration.config_flow.SolectrusInfluxClient",
+            "custom_components.solectrus.config_flow.SolectrusInfluxClient",
             return_value=mock_client,
         ):
             result = await flow.async_step_user(user_input=dict(VALID_USER_INPUT))
@@ -306,7 +306,7 @@ class TestConfigFlowStepUser:
         mock_client.async_close = AsyncMock()
 
         with patch(
-            "custom_components.solectrus_integration.config_flow.SolectrusInfluxClient",
+            "custom_components.solectrus.config_flow.SolectrusInfluxClient",
             return_value=mock_client,
         ):
             result = await flow.async_step_user(user_input=dict(VALID_USER_INPUT))
@@ -371,7 +371,7 @@ class TestConfigFlowStepReconfigure:
         }
 
         with patch(
-            "custom_components.solectrus_integration.config_flow.SolectrusInfluxClient",
+            "custom_components.solectrus.config_flow.SolectrusInfluxClient",
             return_value=mock_client,
         ):
             result = await flow.async_step_reconfigure(user_input=updated_input)
@@ -395,7 +395,7 @@ class TestConfigFlowStepReconfigure:
         mock_client.async_close = AsyncMock()
 
         with patch(
-            "custom_components.solectrus_integration.config_flow.SolectrusInfluxClient",
+            "custom_components.solectrus.config_flow.SolectrusInfluxClient",
             return_value=mock_client,
         ):
             result = await flow.async_step_reconfigure(
@@ -421,7 +421,7 @@ class TestConfigFlowStepReconfigure:
         mock_client.async_close = AsyncMock()
 
         with patch(
-            "custom_components.solectrus_integration.config_flow.SolectrusInfluxClient",
+            "custom_components.solectrus.config_flow.SolectrusInfluxClient",
             return_value=mock_client,
         ):
             result = await flow.async_step_reconfigure(

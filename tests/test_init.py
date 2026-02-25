@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from custom_components.solectrus_integration import (
+from custom_components.solectrus import (
     _build_sensor_map,
     async_setup_entry,
     async_unload_entry,
 )
-from custom_components.solectrus_integration.api import SolectrusConnectionError
-from custom_components.solectrus_integration.const import (
+from custom_components.solectrus.api import SolectrusConnectionError
+from custom_components.solectrus.const import (
     CONF_BUCKET,
     CONF_DATA_TYPE,
     CONF_ENTITY_ID,
@@ -25,8 +25,8 @@ from custom_components.solectrus_integration.const import (
     CONF_URL,
     CONF_VERIFY_SSL,
 )
-from custom_components.solectrus_integration.data import SolectrusRuntimeData
-from custom_components.solectrus_integration.manager import ConfiguredSensor
+from custom_components.solectrus.data import SolectrusRuntimeData
+from custom_components.solectrus.manager import ConfiguredSensor
 
 
 class TestBuildSensorMap:
@@ -161,11 +161,11 @@ class TestAsyncSetupEntry:
 
         with (
             patch(
-                "custom_components.solectrus_integration.SolectrusInfluxClient",
+                "custom_components.solectrus.SolectrusInfluxClient",
                 return_value=mock_client,
             ),
             patch(
-                "custom_components.solectrus_integration.SensorManager",
+                "custom_components.solectrus.SensorManager",
                 return_value=mock_manager,
             ),
         ):
@@ -200,7 +200,7 @@ class TestAsyncSetupEntry:
 
         with (
             patch(
-                "custom_components.solectrus_integration.SolectrusInfluxClient",
+                "custom_components.solectrus.SolectrusInfluxClient",
                 return_value=mock_client,
             ),
             pytest.raises(ConfigEntryNotReady, match="Cannot reach InfluxDB"),
@@ -229,7 +229,7 @@ class TestAsyncSetupEntry:
 
         with (
             patch(
-                "custom_components.solectrus_integration.SolectrusInfluxClient",
+                "custom_components.solectrus.SolectrusInfluxClient",
                 return_value=mock_client,
             ),
             pytest.raises(Exception),  # noqa: B017, PT011

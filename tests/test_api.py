@@ -8,7 +8,7 @@ import pytest
 from influxdb_client.rest import ApiException
 from urllib3.exceptions import HTTPError
 
-from custom_components.solectrus_integration.api import (
+from custom_components.solectrus.api import (
     SolectrusAuthError,
     SolectrusConnectionError,
     SolectrusInfluxClient,

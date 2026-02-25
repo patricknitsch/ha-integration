@@ -28,7 +28,7 @@ This custom integration forwards Home Assistant entity values into an InfluxDB b
 
 ### Manual
 
-1. Copy `custom_components/solectrus_integration` into your Home Assistant `config/custom_components/` folder
+1. Copy `custom_components/solectrus` into your Home Assistant `config/custom_components/` folder
 2. Restart Home Assistant
 
 ## Setup (in Home Assistant)

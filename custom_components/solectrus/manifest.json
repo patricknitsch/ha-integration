@@ -1,5 +1,5 @@
 {
-  "domain": "solectrus_integration",
+  "domain": "solectrus",
   "name": "SOLECTRUS",
   "after_dependencies": ["weather"],
   "codeowners": ["@solectrus"],

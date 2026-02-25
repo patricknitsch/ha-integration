@@ -9,4 +9,4 @@ homeassistant:
 logger:
   default: info
   logs:
-    custom_components.solectrus_integration: debug
+    custom_components.solectrus: debug

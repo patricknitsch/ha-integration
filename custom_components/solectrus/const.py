@@ -8,7 +8,7 @@ from typing import Final
 
 LOGGER: Logger = getLogger(__package__)
 
-DOMAIN = "solectrus_integration"
+DOMAIN = "solectrus"
 
 FORECAST_SENSOR_KEYS: Final[set[str]] = {
     "INVERTER_POWER_FORECAST_CLEARSKY",

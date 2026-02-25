@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from custom_components.solectrus_integration.manager import (
+from custom_components.solectrus.manager import (
     SensorManager,
     _coerce_int,
 )

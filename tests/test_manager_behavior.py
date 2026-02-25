@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from influxdb_client import Point
 
-from custom_components.solectrus_integration.api import SolectrusInfluxError
-from custom_components.solectrus_integration.manager import (
+from custom_components.solectrus.api import SolectrusInfluxError
+from custom_components.solectrus.manager import (
     MAX_PENDING_POINTS,
     ConfiguredSensor,
     PendingPoint,
@@ -401,7 +401,7 @@ class TestHeartbeat:
         mgr._hass.states.get.return_value = mock_state
 
         with patch(
-            "custom_components.solectrus_integration.manager.dt_util.utcnow",
+            "custom_components.solectrus.manager.dt_util.utcnow",
             return_value=FIXED_NOW,
         ):
             mgr._heartbeat(FIXED_NOW)
@@ -420,7 +420,7 @@ class TestHeartbeat:
         mgr._hass.states.get.return_value = mock_state
 
         with patch(
-            "custom_components.solectrus_integration.manager.dt_util.utcnow",
+            "custom_components.solectrus.manager.dt_util.utcnow",
             return_value=FIXED_NOW,
         ):
             mgr._heartbeat(FIXED_NOW)
@@ -433,7 +433,7 @@ class TestHeartbeat:
         mgr._hass.states.get.return_value = MagicMock(state="1500")
 
         with patch(
-            "custom_components.solectrus_integration.manager.dt_util.utcnow",
+            "custom_components.solectrus.manager.dt_util.utcnow",
             return_value=FIXED_NOW,
         ):
             mgr._heartbeat(FIXED_NOW)
@@ -459,7 +459,7 @@ class TestHeartbeat:
         mgr._hass.states.get.side_effect = mock_get
 
         with patch(
-            "custom_components.solectrus_integration.manager.dt_util.utcnow",
+            "custom_components.solectrus.manager.dt_util.utcnow",
             return_value=FIXED_NOW,
         ):
             mgr._heartbeat(FIXED_NOW)
@@ -483,10 +483,10 @@ class TestAsyncStartStop:
 
         with (
             patch(
-                "custom_components.solectrus_integration.manager.async_track_state_change_event"
+                "custom_components.solectrus.manager.async_track_state_change_event"
             ) as mock_track_state,
             patch(
-                "custom_components.solectrus_integration.manager.async_track_time_interval"
+                "custom_components.solectrus.manager.async_track_time_interval"
             ) as mock_track_time,
         ):
             mock_track_state.return_value = MagicMock()
@@ -548,11 +548,11 @@ class TestAsyncStartStop:
 
         with (
             patch(
-                "custom_components.solectrus_integration.manager.async_track_state_change_event",
+                "custom_components.solectrus.manager.async_track_state_change_event",
                 return_value=MagicMock(),
             ),
             patch(
-                "custom_components.solectrus_integration.manager.async_track_time_interval",
+                "custom_components.solectrus.manager.async_track_time_interval",
                 return_value=MagicMock(),
             ),
         ):

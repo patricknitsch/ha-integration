@@ -1,4 +1,4 @@
-"""Custom types for solectrus_integration."""
+"""Custom types for solectrus."""
 
 from __future__ import annotations
 
