@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .api import SolectrusInfluxClient
+from homeassistant.exceptions import ConfigEntryNotReady
+
+from .api import SolectrusConnectionError, SolectrusInfluxClient
 from .const import (
     CONF_BUCKET,
     CONF_DATA_TYPE,
@@ -40,6 +42,12 @@ async def async_setup_entry(
         bucket=entry.data[CONF_BUCKET],
         verify_ssl=entry.data.get(CONF_VERIFY_SSL, True),
     )
+
+    try:
+        await client.async_connect()
+    except SolectrusConnectionError as err:
+        await client.async_close()
+        raise ConfigEntryNotReady(f"Cannot reach InfluxDB: {err}") from err
 
     sensors = _build_sensor_map(entry)
     manager = SensorManager(hass, client, sensors)
