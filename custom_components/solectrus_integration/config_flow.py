@@ -32,10 +32,6 @@ class SolectrusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
     reconfigure_supported = True
 
-    def __init__(self) -> None:
-        """Initialize the config flow."""
-        self._reconfigure_entry: config_entries.ConfigEntry | None = None
-
     async def async_step_reconfigure(
         self, user_input: dict | None = None
     ) -> config_entries.ConfigFlowResult:
@@ -44,8 +40,6 @@ class SolectrusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         entry = self.hass.config_entries.async_get_entry(entry_id) if entry_id else None
         if entry is None:
             return self.async_abort(reason="unknown")
-
-        self._reconfigure_entry = entry
 
         errors: dict[str, str] = {}
         placeholders: dict[str, str] = {}
