@@ -227,16 +227,17 @@ class SensorManager:
 
         normalized_timestamp = self._normalize_timestamp(timestamp or dt_util.utcnow())
         key = pending_key or f"{sensor.key}:{normalized_timestamp.isoformat()}"
+
+        # Evict oldest entry before adding when buffer is full (only for new keys).
+        if key not in self._pending and len(self._pending) >= MAX_PENDING_POINTS:
+            oldest_key = min(self._pending, key=lambda k: self._pending[k].timestamp)
+            del self._pending[oldest_key]
+
         self._pending[key] = PendingPoint(
             sensor=sensor,
             value=coerced,
             timestamp=normalized_timestamp,
         )
-
-        # Evict oldest entry when buffer is full.
-        if len(self._pending) > MAX_PENDING_POINTS:
-            oldest_key = min(self._pending, key=lambda k: self._pending[k].timestamp)
-            del self._pending[oldest_key]
 
     async def _queue_forecast_points(
         self,
