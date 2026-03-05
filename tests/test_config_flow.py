@@ -128,11 +128,11 @@ class TestBuildSensorsSchema:
             },
         }
         schema_dict = _build_sensors_schema(existing, show_advanced=True)
-        # Find the entity key for INVERTER_POWER and check its default
+        # Find the entity key for INVERTER_POWER and check its suggested_value / default
         for key in schema_dict:
             key_str = str(key)
-            if key_str == "INVERTER_POWER_entity" and hasattr(key, "default"):
-                assert key.default() == "sensor.inverter"
+            if key_str == "INVERTER_POWER_entity":
+                assert key.description["suggested_value"] == "sensor.inverter"
             if key_str == "INVERTER_POWER_measurement" and hasattr(key, "default"):
                 assert key.default() == "custom_m"
             if key_str == "INVERTER_POWER_field" and hasattr(key, "default"):

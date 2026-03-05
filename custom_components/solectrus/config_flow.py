@@ -240,12 +240,11 @@ def _build_sensors_schema(existing_sensors: dict, *, show_advanced: bool) -> dic
         schema_dict[
             vol.Optional(
                 f"{key}_entity",
-                default=configured.get(CONF_ENTITY_ID, vol.UNDEFINED),
+                description={
+                    "suggested_value": configured.get(CONF_ENTITY_ID),
+                },
             )
-        ] = vol.Any(
-            None,
-            selector.EntitySelector(selector.EntitySelectorConfig()),
-        )
+        ] = selector.EntitySelector(selector.EntitySelectorConfig())
         if show_advanced:
             schema_dict[
                 vol.Optional(
