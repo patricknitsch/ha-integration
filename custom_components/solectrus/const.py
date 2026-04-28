@@ -25,23 +25,21 @@ CONF_SENSORS: Final = "sensors"
 CONF_ENTITY_ID: Final = "entity_id"
 CONF_MEASUREMENT: Final = "measurement"
 CONF_FIELD: Final = "field"
-CONF_DATA_TYPE: Final = "data_type"
 DATA_TYPE_INT: Final = "int"
 DATA_TYPE_FLOAT: Final = "float"
 DATA_TYPE_BOOL: Final = "bool"
 DATA_TYPE_STRING: Final = "string"
 
-DATA_TYPE_OPTIONS: Final = [
-    DATA_TYPE_INT,
-    DATA_TYPE_FLOAT,
-    DATA_TYPE_BOOL,
-    DATA_TYPE_STRING,
-]
-
 
 @dataclass(frozen=True)
 class SensorDefinition:
-    """Default mapping and datatype for a SOLECTRUS sensor."""
+    """
+    Default mapping and fallback datatype for a SOLECTRUS sensor.
+
+    The fallback type is only applied when InfluxDB has no prior data for
+    the (measurement, field) pair; otherwise the type detected from existing
+    data wins, since Influx freezes the type once a field is written.
+    """
 
     measurement: str
     field: str

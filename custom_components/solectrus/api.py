@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import ssl
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS, WriteApi
 from influxdb_client.rest import ApiException
 from urllib3.exceptions import HTTPError
 
-from .const import LOGGER
+from .const import (
+    DATA_TYPE_BOOL,
+    DATA_TYPE_FLOAT,
+    DATA_TYPE_INT,
+    DATA_TYPE_STRING,
+    LOGGER,
+)
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -20,6 +26,17 @@ if TYPE_CHECKING:
 _HTTP_UNAUTHORIZED = 401
 _HTTP_FORBIDDEN = 403
 _HTTP_NOT_FOUND = 404
+
+
+def _column_type_to_label(data_type: str) -> str:
+    """Map a Flux column data_type annotation to our internal label."""
+    if data_type == "boolean":
+        return DATA_TYPE_BOOL
+    if data_type in ("long", "unsignedLong"):
+        return DATA_TYPE_INT
+    if data_type == "double":
+        return DATA_TYPE_FLOAT
+    return DATA_TYPE_STRING
 
 
 class SolectrusInfluxError(Exception):
@@ -160,7 +177,7 @@ class SolectrusInfluxClient:
             self._handle_connection_exception(err)
 
     @staticmethod
-    def _handle_api_exception(err: ApiException) -> None:
+    def _handle_api_exception(err: ApiException) -> NoReturn:
         """Translate InfluxDB API errors into domain exceptions."""
         if err.status in (_HTTP_UNAUTHORIZED, _HTTP_FORBIDDEN):
             LOGGER.error("InfluxDB authentication failed (HTTP %s)", err.status)
@@ -169,12 +186,81 @@ class SolectrusInfluxClient:
         raise SolectrusInfluxError(f"API error (HTTP {err.status})") from err
 
     @staticmethod
-    def _handle_connection_exception(err: HTTPError | OSError) -> None:
+    def _handle_connection_exception(err: HTTPError | OSError) -> NoReturn:
         """Translate network errors into domain exceptions."""
         LOGGER.warning("InfluxDB connection failed: %s", type(err).__name__)
         raise SolectrusConnectionError(
             f"Connection failed: {type(err).__name__}"
         ) from err
+
+    async def async_get_field_types(
+        self, fields: list[tuple[str, str]]
+    ) -> dict[tuple[str, str], str]:
+        """Return existing field types for the given (measurement, field) tuples."""
+        if not fields:
+            return {}
+
+        client = await self._ensure_client()
+        loop = asyncio.get_running_loop()
+
+        def _esc(value: str) -> str:
+            return value.replace("\\", "\\\\").replace('"', '\\"')
+
+        bucket = _esc(self._bucket)
+        # Filter to only the series we care about so a shared bucket doesn't
+        # slow down the schema lookup. first() suffices because the field type
+        # is frozen at first write and reading the oldest block is cheaper.
+        predicates = " or ".join(
+            f'(r._measurement == "{_esc(m)}" and r._field == "{_esc(f)}")'
+            for m, f in fields
+        )
+        flux = (
+            f'from(bucket: "{bucket}")'
+            " |> range(start: 0)"
+            f" |> filter(fn: (r) => {predicates})"
+            " |> first()"
+            ' |> keep(columns: ["_measurement", "_field", "_value"])'
+        )
+
+        def _query() -> dict[tuple[str, str], str]:
+            query_api = client.query_api()
+            tables = query_api.query(query=flux, org=self._org)
+            result: dict[tuple[str, str], str] = {}
+            for table in tables:
+                # The Flux column annotation is the source of truth for the
+                # field type; deriving it from the deserialized Python value
+                # would be ambiguous (e.g. bool is a subclass of int).
+                value_column = next(
+                    (c for c in table.columns if c.label == "_value"), None
+                )
+                if value_column is None:
+                    continue
+                label = _column_type_to_label(value_column.data_type)
+                for record in table.records:
+                    measurement = record.values.get("_measurement")
+                    field = record.values.get("_field")
+                    if not isinstance(measurement, str) or not isinstance(field, str):
+                        continue
+                    result[(measurement, field)] = label
+            return result
+
+        try:
+            return await loop.run_in_executor(None, _query)
+        except ApiException as err:
+            if err.status in (_HTTP_UNAUTHORIZED, _HTTP_FORBIDDEN):
+                # Token lacks READ permission — degrade gracefully, since this
+                # needs the user to fix the token, not a setup retry.
+                LOGGER.warning(
+                    "InfluxDB schema query forbidden (HTTP %s); the configured "
+                    "token needs READ access to the bucket so existing field "
+                    "types can be detected. Falling back to built-in defaults, "
+                    "which may cause field type conflicts.",
+                    err.status,
+                )
+                return {}
+            self._handle_api_exception(err)
+        except (HTTPError, OSError) as err:
+            self._handle_connection_exception(err)
 
     async def async_close(self) -> None:
         """Close the client."""

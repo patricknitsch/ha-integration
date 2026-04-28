@@ -36,6 +36,8 @@ def _manager(sensors=None, client=None) -> SensorManager:
     if client is None:
         client = MagicMock()
         client.async_write_batch = AsyncMock()
+    if not isinstance(getattr(client, "async_get_field_types", None), AsyncMock):
+        client.async_get_field_types = AsyncMock(return_value={})
     sensor_map = {}
     if sensors:
         for s in sensors:
@@ -562,6 +564,72 @@ class TestAsyncStartStop:
         client.async_write_batch.assert_awaited_once()
         points = client.async_write_batch.call_args[0][0]
         assert len(points) == 1
+
+
+class TestResolveDataTypes:
+    """Tests for SensorManager._resolve_data_types."""
+
+    @pytest.mark.asyncio
+    async def test_adopts_existing_influx_type(self):
+        sensor = _sensor(data_type="int")
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+        client.async_get_field_types = AsyncMock(
+            return_value={("inverter", "power"): "float"}
+        )
+        mgr = _manager([sensor], client=client)
+
+        await mgr._resolve_data_types()
+
+        assert sensor.data_type == "float"
+
+    @pytest.mark.asyncio
+    async def test_keeps_fallback_when_no_data(self):
+        sensor = _sensor(data_type="int")
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+        client.async_get_field_types = AsyncMock(return_value={})
+        mgr = _manager([sensor], client=client)
+
+        await mgr._resolve_data_types()
+
+        assert sensor.data_type == "int"
+
+    @pytest.mark.asyncio
+    async def test_runs_before_first_flush(self):
+        """async_start must resolve types before queuing initial values."""
+        sensor = _sensor(data_type="int")
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+        client.async_get_field_types = AsyncMock(
+            return_value={("inverter", "power"): "float"}
+        )
+        mgr = _manager([sensor], client=client)
+
+        mock_state = MagicMock()
+        mock_state.state = "1500"
+        mock_state.attributes = {}
+        mock_state.last_updated = FIXED_NOW
+        mgr._hass.states.get.return_value = mock_state
+
+        with (
+            patch(
+                "custom_components.solectrus.manager.async_track_state_change_event",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.solectrus.manager.async_track_time_interval",
+                return_value=MagicMock(),
+            ),
+        ):
+            await mgr.async_start()
+
+        points = client.async_write_batch.call_args[0][0]
+        assert len(points) == 1
+        # Influx line protocol marks ints with an `i` suffix; floats have none.
+        line = points[0].to_line_protocol()
+        assert "power=1500" in line
+        assert "power=1500i" not in line
 
 
 class TestWeatherTemperatureSeries:

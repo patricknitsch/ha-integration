@@ -15,7 +15,7 @@ This custom integration forwards Home Assistant entity values into an InfluxDB b
 
 - Home Assistant `2024.6` or newer
 - InfluxDB 2.x reachable from Home Assistant (URL + org + bucket + token)
-- An InfluxDB token with **write** access to the target bucket (read permissions are not required)
+- An InfluxDB token with **read and write** access to the target bucket (read is used to detect existing field types so the integration matches them automatically)
 
 ## Installation
 
@@ -43,24 +43,21 @@ Notes:
 - This integration does not create entities; it exports values of existing entities you select in the options flow.
 - If you don't configure any mappings, no data will be written.
 
+### Data type detection
+
+The integration determines the InfluxDB field type for each (measurement, field) pair automatically on startup:
+
+1. If the bucket already contains data for the field, the existing type wins (Influx freezes the field type on first write, so we have to match it).
+2. Otherwise, a curated default per sensor is used (`int` for power, `float` for SOC/temperatures, `bool` for connection states, `string` for status).
+
+If the incoming Home Assistant state cannot be converted to the resolved type, it is skipped.
+
 ### Advanced options
 
 In the options flow you can enable **Advanced options**. This shows additional fields per sensor:
 
 - **Measurement**: override the default measurement name.
 - **Field**: override the default field name.
-- **Data type**: enforce the value type that is written to InfluxDB.
-
-The data type is important because InfluxDB does not allow changing a field type after it exists. If your bucket already contains a field as `integer`, the integration must keep writing integers, otherwise you will see `field type conflict` errors.
-
-Supported data types:
-
-- `int` – writes integer values (default for power/Watt sensors).
-- `float` – writes floating point values (default for temperatures and SOC).
-- `bool` – writes boolean values.
-- `string` – writes strings (default for `SYSTEM_STATUS`).
-
-If the incoming Home Assistant state cannot be converted to the selected type, it is skipped.
 
 Once configured, the integration listens for entity state changes and writes them to InfluxDB following the above rules.
 
@@ -77,4 +74,4 @@ scripts/develop  # Start Home Assistant with the integration loaded
 
 - **Setup error "Bucket not found"**: ensure the bucket exists and the token has write access to it.
 - **TLS/certificate errors**: `https://` connections verify certificates; use a valid cert/CA, use `http://` for local non-TLS InfluxDB, or disable **Verify SSL certificate** (insecure).
-- **`field type conflict` in InfluxDB**: set the matching **Data type** in **Advanced options** to the field's existing type.
+- **`field type conflict` in InfluxDB**: this should no longer happen, since the integration auto-detects the existing field type from InfluxDB on startup. If it does, check that the configured token has **read** access to the bucket — without read, the integration cannot inspect the schema and falls back to its built-in defaults, which may not match.

@@ -10,7 +10,6 @@ from homeassistant.helpers import selector
 from .api import SolectrusInfluxClient, SolectrusInfluxError
 from .const import (
     CONF_BUCKET,
-    CONF_DATA_TYPE,
     CONF_ENTITY_ID,
     CONF_FIELD,
     CONF_MEASUREMENT,
@@ -19,7 +18,6 @@ from .const import (
     CONF_TOKEN,
     CONF_URL,
     CONF_VERIFY_SSL,
-    DATA_TYPE_OPTIONS,
     DOMAIN,
     LOGGER,
     SENSOR_DEFINITIONS,
@@ -266,17 +264,6 @@ def _build_sensors_schema(existing_sensors: dict, *, show_advanced: bool) -> dic
                     type=selector.TextSelectorType.TEXT,
                 )
             )
-            schema_dict[
-                vol.Optional(
-                    f"{key}_data_type",
-                    default=configured.get(CONF_DATA_TYPE, definition.data_type),
-                )
-            ] = selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=DATA_TYPE_OPTIONS,
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            )
     return schema_dict
 
 
@@ -289,16 +276,13 @@ def _parse_sensors_input(
         entity_id = user_input.get(f"{key}_entity")
         measurement = configured.get(CONF_MEASUREMENT, definition.measurement)
         field = configured.get(CONF_FIELD, definition.field)
-        data_type = configured.get(CONF_DATA_TYPE, definition.data_type)
         if show_advanced:
             measurement = user_input.get(f"{key}_measurement") or measurement
             field = user_input.get(f"{key}_field") or field
-            data_type = user_input.get(f"{key}_data_type") or data_type
         if entity_id:
             sensors[key] = {
                 CONF_ENTITY_ID: entity_id,
                 CONF_MEASUREMENT: measurement,
                 CONF_FIELD: field,
-                CONF_DATA_TYPE: data_type,
             }
     return sensors

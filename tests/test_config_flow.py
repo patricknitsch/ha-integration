@@ -17,7 +17,6 @@ from custom_components.solectrus.config_flow import (
 )
 from custom_components.solectrus.const import (
     CONF_BUCKET,
-    CONF_DATA_TYPE,
     CONF_ENTITY_ID,
     CONF_FIELD,
     CONF_MEASUREMENT,
@@ -116,7 +115,8 @@ class TestBuildSensorsSchema:
             assert f"{sensor_key}_entity" in key_names
             assert f"{sensor_key}_measurement" in key_names
             assert f"{sensor_key}_field" in key_names
-            assert f"{sensor_key}_data_type" in key_names
+            # data_type is no longer surfaced in the UI; detected from Influx.
+            assert f"{sensor_key}_data_type" not in key_names
 
     def test_existing_sensors_populate_defaults(self):
         existing = {
@@ -124,7 +124,6 @@ class TestBuildSensorsSchema:
                 CONF_ENTITY_ID: "sensor.inverter",
                 CONF_MEASUREMENT: "custom_m",
                 CONF_FIELD: "custom_f",
-                CONF_DATA_TYPE: "float",
             },
         }
         schema_dict = _build_sensors_schema(existing, show_advanced=True)
@@ -137,8 +136,6 @@ class TestBuildSensorsSchema:
                 assert key.default() == "custom_m"
             if key_str == "INVERTER_POWER_field" and hasattr(key, "default"):
                 assert key.default() == "custom_f"
-            if key_str == "INVERTER_POWER_data_type" and hasattr(key, "default"):
-                assert key.default() == "float"
 
 
 class TestParseSensorsInput:
@@ -158,20 +155,19 @@ class TestParseSensorsInput:
         defn = SENSOR_DEFINITIONS["INVERTER_POWER"]
         assert sensor[CONF_MEASUREMENT] == defn.measurement
         assert sensor[CONF_FIELD] == defn.field
-        assert sensor[CONF_DATA_TYPE] == defn.data_type
+        assert "data_type" not in sensor
 
     def test_advanced_mode_overrides(self):
         user_input = {
             "INVERTER_POWER_entity": "sensor.inverter_power",
             "INVERTER_POWER_measurement": "custom_inverter",
             "INVERTER_POWER_field": "custom_power",
-            "INVERTER_POWER_data_type": "float",
         }
         result = _parse_sensors_input(user_input, {}, show_advanced=True)
         sensor = result["INVERTER_POWER"]
         assert sensor[CONF_MEASUREMENT] == "custom_inverter"
         assert sensor[CONF_FIELD] == "custom_power"
-        assert sensor[CONF_DATA_TYPE] == "float"
+        assert "data_type" not in sensor
 
     def test_no_entity_id_skips_sensor(self):
         user_input = {
@@ -187,7 +183,6 @@ class TestParseSensorsInput:
             "INVERTER_POWER": {
                 CONF_MEASUREMENT: "existing_m",
                 CONF_FIELD: "existing_f",
-                CONF_DATA_TYPE: "string",
             },
         }
         user_input = {"INVERTER_POWER_entity": "sensor.inverter_power"}
@@ -196,14 +191,12 @@ class TestParseSensorsInput:
         # Basic mode uses existing sensor config, not defaults
         assert sensor[CONF_MEASUREMENT] == "existing_m"
         assert sensor[CONF_FIELD] == "existing_f"
-        assert sensor[CONF_DATA_TYPE] == "string"
 
     def test_advanced_mode_fallback_to_existing(self):
         existing = {
             "INVERTER_POWER": {
                 CONF_MEASUREMENT: "existing_m",
                 CONF_FIELD: "existing_f",
-                CONF_DATA_TYPE: "string",
             },
         }
         # Advanced mode with empty overrides falls back to existing
@@ -211,13 +204,11 @@ class TestParseSensorsInput:
             "INVERTER_POWER_entity": "sensor.inverter_power",
             "INVERTER_POWER_measurement": "",
             "INVERTER_POWER_field": "",
-            "INVERTER_POWER_data_type": "",
         }
         result = _parse_sensors_input(user_input, existing, show_advanced=True)
         sensor = result["INVERTER_POWER"]
         assert sensor[CONF_MEASUREMENT] == "existing_m"
         assert sensor[CONF_FIELD] == "existing_f"
-        assert sensor[CONF_DATA_TYPE] == "string"
 
     def test_multiple_sensors(self):
         user_input = {
@@ -533,7 +524,6 @@ class TestOptionsFlowSensors:
             "INVERTER_POWER_entity": "sensor.inverter_power",
             "INVERTER_POWER_measurement": "custom_meas",
             "INVERTER_POWER_field": "custom_field",
-            "INVERTER_POWER_data_type": "float",
         }
         result = await handler.async_step_sensors(user_input=user_input)
 
@@ -542,7 +532,6 @@ class TestOptionsFlowSensors:
         sensor = result["data"][CONF_SENSORS]["INVERTER_POWER"]
         assert sensor[CONF_MEASUREMENT] == "custom_meas"
         assert sensor[CONF_FIELD] == "custom_field"
-        assert sensor[CONF_DATA_TYPE] == "float"
 
     @pytest.mark.asyncio
     async def test_sensors_empty_input_creates_empty_sensors(self):

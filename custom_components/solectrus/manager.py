@@ -18,7 +18,14 @@ if TYPE_CHECKING:
     from homeassistant.core import Event, HomeAssistant, State
 
 from .api import SolectrusInfluxClient, SolectrusInfluxError
-from .const import FORECAST_SENSOR_KEYS, LOGGER
+from .const import (
+    DATA_TYPE_BOOL,
+    DATA_TYPE_FLOAT,
+    DATA_TYPE_INT,
+    DATA_TYPE_STRING,
+    FORECAST_SENSOR_KEYS,
+    LOGGER,
+)
 
 BATCH_INTERVAL = timedelta(seconds=5)
 HEARTBEAT_INTERVAL = timedelta(minutes=5)
@@ -42,9 +49,9 @@ def _coerce_int(value: Any) -> int:
 
 
 SIMPLE_CONVERTERS: dict[str, Any] = {
-    "int": _coerce_int,
-    "float": float,
-    "string": str,
+    DATA_TYPE_INT: _coerce_int,
+    DATA_TYPE_FLOAT: float,
+    DATA_TYPE_STRING: str,
 }
 
 
@@ -93,6 +100,10 @@ class SensorManager:
 
     async def async_start(self) -> None:
         """Start listening for state updates."""
+        # Must run before any writes: Influx freezes the field type on first
+        # write, so we have to match existing data or be rejected.
+        await self._resolve_data_types()
+
         # Queue initial values
         for sensor in self._sensors.values():
             if sensor.key in FORECAST_SENSOR_KEYS:
@@ -126,6 +137,37 @@ class SensorManager:
 
         # Send initial batch immediately
         await self._flush_batch(dt_util.utcnow())
+
+    async def _resolve_data_types(self) -> None:
+        """Adopt the types already present in InfluxDB for configured fields."""
+        if not self._sensors:
+            return
+        # Multiple sensor keys can share one (measurement, field) — dedupe.
+        fields = sorted({(s.measurement, s.field) for s in self._sensors.values()})
+        # Auth errors degrade gracefully (empty dict) inside the API layer;
+        # transient errors propagate so HA can retry setup with ConfigEntryNotReady.
+        existing = await self._client.async_get_field_types(fields)
+
+        for sensor in self._sensors.values():
+            detected = existing.get((sensor.measurement, sensor.field))
+            if detected is None:
+                LOGGER.debug(
+                    "No prior data for %s.%s; using fallback type %s",
+                    sensor.measurement,
+                    sensor.field,
+                    sensor.data_type,
+                )
+                continue
+            if detected == sensor.data_type:
+                continue
+            LOGGER.info(
+                "Adopting Influx field type for %s.%s: %s (fallback was %s)",
+                sensor.measurement,
+                sensor.field,
+                detected,
+                sensor.data_type,
+            )
+            sensor.data_type = detected
 
     async def async_stop(self) -> None:
         """Stop listeners and timers."""
@@ -390,7 +432,7 @@ class SensorManager:
         try:
             if data_type in SIMPLE_CONVERTERS:
                 coerced: Any | None = SIMPLE_CONVERTERS[data_type](value)
-            elif data_type == "bool":
+            elif data_type == DATA_TYPE_BOOL:
                 if isinstance(value, bool):
                     coerced = value
                 elif isinstance(value, (int, float)):

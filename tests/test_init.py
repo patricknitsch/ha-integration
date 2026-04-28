@@ -15,7 +15,6 @@ from custom_components.solectrus import (
 from custom_components.solectrus.api import SolectrusConnectionError
 from custom_components.solectrus.const import (
     CONF_BUCKET,
-    CONF_DATA_TYPE,
     CONF_ENTITY_ID,
     CONF_FIELD,
     CONF_MEASUREMENT,
@@ -77,7 +76,7 @@ class TestBuildSensorMap:
         assert result == {}
 
     def test_build_sensor_map_custom_overrides(self):
-        """Custom measurement/field/data_type are used."""
+        """Custom measurement/field from options are used."""
         mock_entry = MagicMock()
         mock_entry.options = {
             CONF_SENSORS: {
@@ -85,7 +84,6 @@ class TestBuildSensorMap:
                     CONF_ENTITY_ID: "sensor.my_inverter",
                     CONF_MEASUREMENT: "custom_measurement",
                     CONF_FIELD: "custom_field",
-                    CONF_DATA_TYPE: "string",
                 },
             },
         }
@@ -95,7 +93,6 @@ class TestBuildSensorMap:
         sensor = result["sensor.my_inverter"]
         assert sensor.measurement == "custom_measurement"
         assert sensor.field == "custom_field"
-        assert sensor.data_type == "string"
 
     def test_build_sensor_map_defaults_for_known_sensor(self):
         """Known sensor (e.g. INVERTER_POWER) gets defaults from SENSOR_DEFINITIONS."""
@@ -113,10 +110,11 @@ class TestBuildSensorMap:
         sensor = result["sensor.inverter_power"]
         assert sensor.measurement == "inverter"
         assert sensor.field == "power"
+        # data_type seeded from fallback; the manager replaces it on startup.
         assert sensor.data_type == "int"
 
-    def test_build_sensor_map_defaults_for_unknown_sensor(self):
-        """Unknown sensor key gets fallback defaults."""
+    def test_build_sensor_map_skips_unknown_sensor(self):
+        """Unknown sensor keys are skipped (only SENSOR_DEFINITIONS keys are valid)."""
         mock_entry = MagicMock()
         mock_entry.options = {
             CONF_SENSORS: {
@@ -128,10 +126,7 @@ class TestBuildSensorMap:
 
         result = _build_sensor_map(mock_entry)
 
-        sensor = result["sensor.unknown"]
-        assert sensor.measurement == "totally_unknown_sensor"
-        assert sensor.field == "value"
-        assert sensor.data_type == "float"
+        assert result == {}
 
 
 class TestAsyncSetupEntry:

@@ -6,10 +6,9 @@ from typing import TYPE_CHECKING
 
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .api import SolectrusConnectionError, SolectrusInfluxClient
+from .api import SolectrusInfluxClient, SolectrusInfluxError
 from .const import (
     CONF_BUCKET,
-    CONF_DATA_TYPE,
     CONF_ENTITY_ID,
     CONF_FIELD,
     CONF_MEASUREMENT,
@@ -18,6 +17,7 @@ from .const import (
     CONF_TOKEN,
     CONF_URL,
     CONF_VERIFY_SSL,
+    LOGGER,
     SENSOR_DEFINITIONS,
 )
 from .data import SolectrusConfigEntry, SolectrusRuntimeData
@@ -43,15 +43,14 @@ async def async_setup_entry(
         verify_ssl=entry.data.get(CONF_VERIFY_SSL, True),
     )
 
-    try:
-        await client.async_connect()
-    except SolectrusConnectionError as err:
-        await client.async_close()
-        raise ConfigEntryNotReady(f"Cannot reach InfluxDB: {err}") from err
-
     sensors = _build_sensor_map(entry)
     manager = SensorManager(hass, client, sensors)
-    await manager.async_start()
+    try:
+        await client.async_connect()
+        await manager.async_start()
+    except SolectrusInfluxError as err:
+        await client.async_close()
+        raise ConfigEntryNotReady(f"Cannot reach InfluxDB: {err}") from err
 
     entry.runtime_data = SolectrusRuntimeData(
         client=client,
@@ -92,21 +91,20 @@ def _build_sensor_map(entry: SolectrusConfigEntry) -> dict[str, ConfiguredSensor
             continue
 
         defaults = SENSOR_DEFINITIONS.get(key)
-        measurement = settings.get(
-            CONF_MEASUREMENT, defaults.measurement if defaults else key.lower()
-        )
-        field = settings.get(CONF_FIELD, defaults.field if defaults else "value")
-        data_type = settings.get(
-            CONF_DATA_TYPE, defaults.data_type if defaults else "float"
-        )
+        if defaults is None:
+            LOGGER.warning("Unknown sensor key %r in config; skipping", key)
+            continue
+
+        measurement = settings.get(CONF_MEASUREMENT, defaults.measurement)
+        field = settings.get(CONF_FIELD, defaults.field)
         sensors[entity_id] = ConfiguredSensor(
             key=key,
             entity_id=entity_id,
             measurement=measurement,
             field=field,
-            data_type=data_type,
-            min_value=defaults.min_value if defaults else None,
-            max_value=defaults.max_value if defaults else None,
+            data_type=defaults.data_type,
+            min_value=defaults.min_value,
+            max_value=defaults.max_value,
         )
 
     return sensors
