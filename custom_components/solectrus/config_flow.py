@@ -61,9 +61,12 @@ class SolectrusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
                 LOGGER.exception("Unexpected error during Influx validation: %s", exc)
             else:
-                return self.async_update_reload_and_abort(
-                    entry, data_updates=user_input
+                # The entry's update listener (see __init__.py) schedules the
+                # reload, so update the entry and abort without an extra reload.
+                self.hass.config_entries.async_update_entry(
+                    entry, data={**entry.data, **user_input}
                 )
+                return self.async_abort(reason="reconfigure_successful")
             finally:
                 await client.async_close()
 
