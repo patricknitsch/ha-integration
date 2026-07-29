@@ -30,15 +30,15 @@ def client():
 class TestUrlNormalization:
     """Tests for scheme handling in SolectrusInfluxClient.__init__."""
 
-    def test_bare_host_gets_https_scheme(self):
+    def test_bare_host_gets_http_scheme(self):
         client = SolectrusInfluxClient(
             url="localhost:8086",
             token="test-token",  # noqa: S106
             org="test-org",
             bucket="test-bucket",
         )
-        assert client._url == "https://localhost:8086"
-        assert client._ssl is True
+        assert client._url == "http://localhost:8086"
+        assert client._ssl is False
 
     def test_http_scheme_preserved(self):
         client = SolectrusInfluxClient(
@@ -67,7 +67,7 @@ class TestUrlNormalization:
             org="test-org",
             bucket="test-bucket",
         )
-        assert client._url == "https://localhost:8086"
+        assert client._url == "http://localhost:8086"
 
 
 class TestValidateConnection:

@@ -34,12 +34,13 @@ def _normalize_url(url: str) -> str:
 
     A bare host[:port] (no "://") is otherwise passed straight to urllib3,
     which emits a FutureWarning and will be a hard error in urllib3 v3.
-    Default to https when no scheme was given, since that's also what an
-    unprefixed URL is already treated as for TLS purposes below.
+    Default to http since InfluxDB is typically run on the same internal
+    network as Home Assistant; users who need TLS specify "https://"
+    explicitly and can then toggle the verify_ssl option.
     """
     stripped = url.strip()
     if "://" not in stripped:
-        return f"https://{stripped}"
+        return f"http://{stripped}"
     return stripped
 
 
