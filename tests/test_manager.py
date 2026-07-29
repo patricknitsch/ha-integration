@@ -193,6 +193,27 @@ class TestAttributeForecastSeries:
         result = SensorManager._attribute_forecast_series(forecast, value_key="power")
         assert len(result) == 2
 
+    def test_multiple_value_keys_prefers_first_present(self):
+        forecast = [
+            {"datetime": "2024-01-15T12:00:00+00:00", "watts": 100},
+            {"datetime": "2024-01-15T13:00:00+00:00", "power": 200, "watts": 999},
+        ]
+        result = SensorManager._attribute_forecast_series(
+            forecast, value_key=("power", "watts")
+        )
+        assert len(result) == 2
+        assert result[0][1] == 100
+        assert result[1][1] == 200
+
+    def test_multiple_value_keys_none_present(self):
+        forecast = [
+            {"datetime": "2024-01-15T12:00:00+00:00", "other": 100},
+        ]
+        result = SensorManager._attribute_forecast_series(
+            forecast, value_key=("power", "watts")
+        )
+        assert result == []
+
 
 class TestNormalizeTimestamp:
     """Tests for SensorManager._normalize_timestamp."""

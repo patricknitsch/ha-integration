@@ -16,6 +16,18 @@ FORECAST_SENSOR_KEYS: Final[set[str]] = {
     "OUTDOOR_TEMP_FORECAST",
 }
 
+# Candidate keys to look up inside each item of a "forecast" attribute list,
+# tried in order. The field name alone ("power") matches simple/generic
+# forecast sources, while the extra names cover integrations - like pvnode -
+# that name their per-metric forecast keys explicitly (e.g. "watts",
+# "watts_clearsky") because a single entity can expose more than one
+# power-like forecast.
+FORECAST_ATTRIBUTE_VALUE_KEYS: Final[dict[str, tuple[str, ...]]] = {
+    "INVERTER_POWER_FORECAST": ("power", "watts"),
+    "INVERTER_POWER_FORECAST_CLEARSKY": ("power", "watts_clearsky"),
+    "OUTDOOR_TEMP_FORECAST": ("temperature",),
+}
+
 CONF_URL: Final = "url"
 CONF_TOKEN: Final = "token"  # noqa: S105
 CONF_ORG: Final = "org"

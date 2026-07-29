@@ -23,6 +23,7 @@ from .const import (
     DATA_TYPE_FLOAT,
     DATA_TYPE_INT,
     DATA_TYPE_STRING,
+    FORECAST_ATTRIBUTE_VALUE_KEYS,
     FORECAST_SENSOR_KEYS,
     LOGGER,
 )
@@ -312,9 +313,7 @@ class SensorManager:
         if sensor.entity_id.startswith("weather."):
             series = await self._weather_temperature_series(sensor.entity_id)
         else:
-            value_key = (
-                "temperature" if sensor.key == "OUTDOOR_TEMP_FORECAST" else sensor.field
-            )
+            value_key = FORECAST_ATTRIBUTE_VALUE_KEYS.get(sensor.key, (sensor.field,))
             series = self._attribute_forecast_series(
                 state.attributes.get("forecast"),
                 value_key=value_key,
@@ -373,10 +372,12 @@ class SensorManager:
     def _attribute_forecast_series(
         forecast_list: Any,
         *,
-        value_key: str,
+        value_key: str | tuple[str, ...],
     ) -> list[tuple[datetime, Any]]:
         if not isinstance(forecast_list, list):
             return []
+
+        value_keys = (value_key,) if isinstance(value_key, str) else value_key
 
         series: list[tuple[datetime, Any]] = []
         for item in forecast_list:
@@ -392,8 +393,14 @@ class SensorManager:
             if raw_time is None:
                 continue
 
+            value = None
+            for key in value_keys:
+                candidate = item.get(key)
+                if candidate is not None:
+                    value = candidate
+                    break
+
             when = dt_util.parse_datetime(raw_time)
-            value = item.get(value_key)
             if when is not None and value is not None:
                 series.append((dt_util.as_utc(when), value))
 
