@@ -140,6 +140,32 @@ class TestStateToValue:
         assert SensorManager._state_to_value(state) == "heating"
 
 
+class TestForecastAttributeList:
+    """Tests for SensorManager._forecast_attribute_list."""
+
+    class MockState:
+        """Simple mock for Home Assistant State."""
+
+        def __init__(self, attributes: dict):
+            self.attributes = attributes
+
+    def test_prefers_forecast(self):
+        state = self.MockState({"forecast": [{"a": 1}], "detailedForecast": [{"b": 2}]})
+        assert SensorManager._forecast_attribute_list(state) == [{"a": 1}]
+
+    def test_falls_back_to_detailed_forecast(self):
+        state = self.MockState({"forecast": [], "detailedForecast": [{"b": 2}]})
+        assert SensorManager._forecast_attribute_list(state) == [{"b": 2}]
+
+    def test_falls_back_to_detailed_hourly(self):
+        state = self.MockState({"detailedHourly": [{"c": 3}]})
+        assert SensorManager._forecast_attribute_list(state) == [{"c": 3}]
+
+    def test_no_attributes_present(self):
+        state = self.MockState({})
+        assert SensorManager._forecast_attribute_list(state) is None
+
+
 class TestAttributeForecastSeries:
     """Tests for SensorManager._attribute_forecast_series."""
 
@@ -192,6 +218,49 @@ class TestAttributeForecastSeries:
         ]
         result = SensorManager._attribute_forecast_series(forecast, value_key="power")
         assert len(result) == 2
+
+    def test_multiple_value_keys_prefers_first_present(self):
+        forecast = [
+            {"datetime": "2024-01-15T12:00:00+00:00", "watts": 100},
+            {"datetime": "2024-01-15T13:00:00+00:00", "power": 200, "watts": 999},
+        ]
+        result = SensorManager._attribute_forecast_series(
+            forecast, value_key=("power", "watts")
+        )
+        assert len(result) == 2
+        assert result[0][1] == 100
+        assert result[1][1] == 200
+
+    def test_multiple_value_keys_none_present(self):
+        forecast = [
+            {"datetime": "2024-01-15T12:00:00+00:00", "other": 100},
+        ]
+        result = SensorManager._attribute_forecast_series(
+            forecast, value_key=("power", "watts")
+        )
+        assert result == []
+
+    def test_value_key_multiplier(self):
+        """ha-solcast-solar's pv_estimate is in kW; scale it to W."""
+        forecast = [
+            {"datetime": "2024-01-15T12:00:00+00:00", "pv_estimate": 1.5},
+        ]
+        result = SensorManager._attribute_forecast_series(
+            forecast, value_key=(("power", 1), ("watts", 1), ("pv_estimate", 1000))
+        )
+        assert len(result) == 1
+        assert result[0][1] == 1500.0
+
+    def test_period_start_time_key_as_datetime_object(self):
+        """ha-solcast-solar's period_start is a real datetime, not an ISO string."""
+        when = datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC)
+        forecast = [{"period_start": when, "pv_estimate": 2.0}]
+        result = SensorManager._attribute_forecast_series(
+            forecast, value_key=(("pv_estimate", 1000),)
+        )
+        assert len(result) == 1
+        assert result[0][0] == when
+        assert result[0][1] == 2000.0
 
 
 class TestNormalizeTimestamp:
