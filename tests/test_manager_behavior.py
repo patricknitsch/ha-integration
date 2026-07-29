@@ -226,6 +226,49 @@ class TestFlushBatch:
         # The newer value (2000) should be preserved, not overwritten by the old (1500)
         assert mgr._pending[key].value == 2000
 
+    @pytest.mark.asyncio
+    async def test_logs_each_point_at_debug_level(self, caplog):
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+        sensor = _sensor()
+        mgr = _manager([sensor], client=client)
+
+        mgr._queue_point(sensor, 1500, timestamp=FIXED_NOW)
+
+        with caplog.at_level(logging.DEBUG):
+            await mgr._flush_batch(FIXED_NOW)
+
+        debug_messages = [
+            r.message for r in caplog.records if r.levelno == logging.DEBUG
+        ]
+        point_logs = [m for m in debug_messages if m.startswith("Influx point:")]
+        assert len(point_logs) == 1
+        assert "sensor=INVERTER_POWER" in point_logs[0]
+        assert "measurement=inverter" in point_logs[0]
+        assert "field=power" in point_logs[0]
+        assert "value=1500" in point_logs[0]
+        assert any("succeeded: 1 point" in m for m in debug_messages)
+
+    @pytest.mark.asyncio
+    async def test_logs_points_even_when_write_fails(self, caplog):
+        client = MagicMock()
+        client.async_write_batch = AsyncMock(
+            side_effect=SolectrusInfluxError("write failed")
+        )
+        sensor = _sensor()
+        mgr = _manager([sensor], client=client)
+
+        mgr._queue_point(sensor, 1500, timestamp=FIXED_NOW)
+
+        with caplog.at_level(logging.DEBUG):
+            await mgr._flush_batch(FIXED_NOW)
+
+        debug_messages = [
+            r.message for r in caplog.records if r.levelno == logging.DEBUG
+        ]
+        assert any(m.startswith("Influx point:") for m in debug_messages)
+        assert any("batch write failed" in m for m in debug_messages)
+
 
 class TestHandleStateChange:
     """Tests for _handle_state_change."""
