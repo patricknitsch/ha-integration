@@ -108,9 +108,14 @@ class SensorManager:
 
         # Queue initial values
         for sensor in self._sensors.values():
-            if sensor.key in FORECAST_SENSOR_KEYS:
-                continue
             current_state = self._hass.states.get(sensor.entity_id)
+            if sensor.key in FORECAST_SENSOR_KEYS:
+                # Seed immediately from whatever the source already has,
+                # instead of waiting for its next state change - which, for
+                # slow-polling sources, can otherwise leave InfluxDB empty
+                # for a long time after every HA/integration restart.
+                await self._queue_forecast_points(sensor, current_state)
+                continue
             value = self._state_to_value(current_state)
             if value is not None:
                 timestamp = self._normalize_timestamp(

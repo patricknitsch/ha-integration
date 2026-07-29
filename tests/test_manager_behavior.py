@@ -641,6 +641,66 @@ class TestAsyncStartStop:
         points = client.async_write_batch.call_args[0][0]
         assert len(points) == 1
 
+    @pytest.mark.asyncio
+    async def test_start_seeds_forecast_from_current_state(self):
+        """Forecast sensors must not wait for their next state change to seed.
+
+        Sources like pvnode can poll on a long interval, so relying solely on
+        the next state_changed event can leave InfluxDB empty for a long time
+        after every restart even though the source already has data now.
+        """
+        sensor = _sensor(key="INVERTER_POWER_FORECAST", entity_id="sensor.forecast")
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+        mgr = _manager([sensor], client=client)
+
+        mock_state = MagicMock()
+        mock_state.attributes = {
+            "forecast": [
+                {"datetime": "2024-06-15T13:00:00+00:00", "watts": 1500},
+                {"datetime": "2024-06-15T14:00:00+00:00", "watts": 1800},
+            ]
+        }
+        mgr._hass.states.get.return_value = mock_state
+
+        with (
+            patch(
+                "custom_components.solectrus.manager.async_track_state_change_event",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.solectrus.manager.async_track_time_interval",
+                return_value=MagicMock(),
+            ),
+        ):
+            await mgr.async_start()
+
+        client.async_write_batch.assert_awaited_once()
+        points = client.async_write_batch.call_args[0][0]
+        assert len(points) == 2
+
+    @pytest.mark.asyncio
+    async def test_start_skips_forecast_seed_when_state_missing(self):
+        sensor = _sensor(key="INVERTER_POWER_FORECAST", entity_id="sensor.forecast")
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+        mgr = _manager([sensor], client=client)
+        mgr._hass.states.get.return_value = None
+
+        with (
+            patch(
+                "custom_components.solectrus.manager.async_track_state_change_event",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.solectrus.manager.async_track_time_interval",
+                return_value=MagicMock(),
+            ),
+        ):
+            await mgr.async_start()
+
+        client.async_write_batch.assert_not_called()
+
 
 class TestResolveDataTypes:
     """Tests for SensorManager._resolve_data_types."""
