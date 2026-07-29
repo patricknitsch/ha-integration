@@ -23,6 +23,7 @@ from .const import (
     DATA_TYPE_FLOAT,
     DATA_TYPE_INT,
     DATA_TYPE_STRING,
+    FORECAST_ATTRIBUTE_NAMES,
     FORECAST_ATTRIBUTE_VALUE_KEYS,
     FORECAST_SENSOR_KEYS,
     LOGGER,
@@ -315,7 +316,7 @@ class SensorManager:
         else:
             value_key = FORECAST_ATTRIBUTE_VALUE_KEYS.get(sensor.key, (sensor.field,))
             series = self._attribute_forecast_series(
-                state.attributes.get("forecast"),
+                self._forecast_attribute_list(state),
                 value_key=value_key,
             )
 
@@ -369,15 +370,35 @@ class SensorManager:
         return series
 
     @staticmethod
+    def _forecast_attribute_list(state: State) -> Any:
+        """Return the first non-empty forecast time series attribute, if any."""
+        for name in FORECAST_ATTRIBUTE_NAMES:
+            candidate = state.attributes.get(name)
+            if isinstance(candidate, list) and candidate:
+                return candidate
+        return None
+
+    @staticmethod
+    def _normalize_value_keys(
+        value_key: str | tuple[str | tuple[str, float], ...],
+    ) -> list[tuple[str, float]]:
+        """Normalize the value_key shorthand forms into (key, multiplier) pairs."""
+        if isinstance(value_key, str):
+            return [(value_key, 1)]
+        return [
+            entry if isinstance(entry, tuple) else (entry, 1) for entry in value_key
+        ]
+
+    @staticmethod
     def _attribute_forecast_series(
         forecast_list: Any,
         *,
-        value_key: str | tuple[str, ...],
+        value_key: str | tuple[str | tuple[str, float], ...],
     ) -> list[tuple[datetime, Any]]:
         if not isinstance(forecast_list, list):
             return []
 
-        value_keys = (value_key,) if isinstance(value_key, str) else value_key
+        value_keys = SensorManager._normalize_value_keys(value_key)
 
         series: list[tuple[datetime, Any]] = []
         for item in forecast_list:
@@ -385,7 +406,7 @@ class SensorManager:
                 continue
 
             raw_time = None
-            for key in ("datetime", "time", "period_end"):
+            for key in ("datetime", "time", "period_end", "period_start"):
                 candidate = item.get(key)
                 if candidate:
                     raw_time = candidate
@@ -394,14 +415,22 @@ class SensorManager:
                 continue
 
             value = None
-            for key in value_keys:
+            for key, multiplier in value_keys:
                 candidate = item.get(key)
                 if candidate is not None:
-                    value = candidate
+                    value = candidate * multiplier if multiplier != 1 else candidate
                     break
+            if value is None:
+                continue
 
-            when = dt_util.parse_datetime(raw_time)
-            if when is not None and value is not None:
+            # Some sources (e.g. ha-solcast-solar) already provide a datetime
+            # object here instead of an ISO string.
+            when = (
+                raw_time
+                if isinstance(raw_time, datetime)
+                else dt_util.parse_datetime(raw_time)
+            )
+            if when is not None:
                 series.append((dt_util.as_utc(when), value))
 
         return series

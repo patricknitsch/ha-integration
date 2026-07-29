@@ -435,6 +435,35 @@ class TestHandleStateChange:
         point = next(iter(mgr._pending.values()))
         assert point.value == 2000
 
+    @pytest.mark.asyncio
+    async def test_forecast_sensor_reads_solcast_detailed_forecast(self):
+        """ha-solcast-solar uses period_start (datetime) / pv_estimate (kW)."""
+        sensor = _sensor(key="INVERTER_POWER_FORECAST", entity_id="sensor.forecast")
+        mgr = _manager([sensor])
+
+        new_state = MagicMock()
+        new_state.attributes = {
+            # Solcast's time series lives under "detailedForecast"/
+            # "detailedHourly", not "forecast" - left empty here to prove
+            # the fallback attribute name is actually used.
+            "forecast": [],
+            "detailedForecast": [
+                {
+                    "period_start": datetime(2024, 6, 15, 13, 0, 0, tzinfo=UTC),
+                    "pv_estimate": 1.5,
+                },
+            ],
+        }
+
+        event = MagicMock()
+        event.data = {"entity_id": "sensor.forecast", "new_state": new_state}
+
+        await mgr._handle_state_change(event)
+
+        assert len(mgr._pending) == 1
+        point = next(iter(mgr._pending.values()))
+        assert point.value == 1500.0
+
 
 class TestHeartbeat:
     """Tests for _heartbeat."""
