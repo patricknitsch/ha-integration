@@ -454,6 +454,17 @@ class SensorManager:
             point.field(item.sensor.field, item.value)
             point.time(item.timestamp, WritePrecision.S)
             points.append(point)
+            # Logged before the write attempt so it's visible even on failure -
+            # enable debug logging for this integration to see exactly what
+            # gets sent to InfluxDB.
+            LOGGER.debug(
+                "Influx point: sensor=%s measurement=%s field=%s value=%r timestamp=%s",
+                item.sensor.key,
+                item.sensor.measurement,
+                item.sensor.field,
+                item.value,
+                item.timestamp.isoformat(),
+            )
 
         try:
             await self._client.async_write_batch(points)
@@ -466,6 +477,8 @@ class SensorManager:
                 len(self._pending),
                 err,
             )
+        else:
+            LOGGER.debug("Influx batch write succeeded: %d point(s) sent", len(points))
 
     @staticmethod
     def _coerce_value(value: Any, data_type: str) -> Any | None:
