@@ -16,6 +16,34 @@ FORECAST_SENSOR_KEYS: Final[set[str]] = {
     "OUTDOOR_TEMP_FORECAST",
 }
 
+# Candidate (key, multiplier) pairs to look up inside each item of a
+# "forecast" attribute list, tried in order; the first key present in an item
+# wins and its value is multiplied by the paired factor. The field name alone
+# ("power") matches simple/generic forecast sources, while the extra names
+# cover integrations that name (and scale) their per-metric forecast keys
+# differently:
+# - pvnode: "watts" / "watts_clearsky", already in W.
+# - ha-solcast-solar: "pv_estimate" in the detailedForecast/detailedHourly
+#   attribute, reported in kW, hence the x1000 factor to match the Watt-based
+#   INVERTER_POWER_FORECAST field. Solcast has no clear-sky or temperature
+#   forecast, so it only applies to INVERTER_POWER_FORECAST.
+FORECAST_ATTRIBUTE_VALUE_KEYS: Final[dict[str, tuple[tuple[str, float], ...]]] = {
+    "INVERTER_POWER_FORECAST": (("power", 1), ("watts", 1), ("pv_estimate", 1000)),
+    "INVERTER_POWER_FORECAST_CLEARSKY": (("power", 1), ("watts_clearsky", 1)),
+    "OUTDOOR_TEMP_FORECAST": (("temperature", 1),),
+}
+
+# Candidate state attribute names holding the forecast time series list,
+# tried in order; the first one present (as a non-empty list) wins.
+# "forecast" covers pvnode and generic sources. ha-solcast-solar instead uses
+# "detailedForecast" (finer-grained, preferred when present) or
+# "detailedHourly" on its energy forecast sensors.
+FORECAST_ATTRIBUTE_NAMES: Final[tuple[str, ...]] = (
+    "forecast",
+    "detailedForecast",
+    "detailedHourly",
+)
+
 CONF_URL: Final = "url"
 CONF_TOKEN: Final = "token"  # noqa: S105
 CONF_ORG: Final = "org"

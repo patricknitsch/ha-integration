@@ -23,6 +23,8 @@ from .const import (
     DATA_TYPE_FLOAT,
     DATA_TYPE_INT,
     DATA_TYPE_STRING,
+    FORECAST_ATTRIBUTE_NAMES,
+    FORECAST_ATTRIBUTE_VALUE_KEYS,
     FORECAST_SENSOR_KEYS,
     LOGGER,
 )
@@ -97,6 +99,7 @@ class SensorManager:
         self._unsub_heartbeat = None
         self._pending: dict[str, PendingPoint] = {}
         self._warned_out_of_range: set[str] = set()
+        self._unavailable_sensors: set[str] = set()
 
     async def async_start(self) -> None:
         """Start listening for state updates."""
@@ -106,9 +109,15 @@ class SensorManager:
 
         # Queue initial values
         for sensor in self._sensors.values():
-            if sensor.key in FORECAST_SENSOR_KEYS:
-                continue
             current_state = self._hass.states.get(sensor.entity_id)
+            self._check_availability(sensor, current_state)
+            if sensor.key in FORECAST_SENSOR_KEYS:
+                # Seed immediately from whatever the source already has,
+                # instead of waiting for its next state change - which, for
+                # slow-polling sources, can otherwise leave InfluxDB empty
+                # for a long time after every HA/integration restart.
+                await self._queue_forecast_points(sensor, current_state)
+                continue
             value = self._state_to_value(current_state)
             if value is not None:
                 timestamp = self._normalize_timestamp(
@@ -184,6 +193,42 @@ class SensorManager:
         if self._pending:
             await self._flush_batch(dt_util.utcnow())
 
+    def _check_availability(
+        self,
+        sensor: ConfiguredSensor,
+        state: State | None,
+    ) -> None:
+        """
+        Warn once when a sensor becomes unknown/unavailable/missing.
+
+        Also logs once when it starts reporting again, so outages are
+        visible in the log even though no points are written for them
+        (see _state_to_value).
+        """
+        if state is None:
+            status = "missing"
+        elif state.state == STATE_UNAVAILABLE:
+            status = "unavailable"
+        elif state.state == STATE_UNKNOWN:
+            status = "unknown"
+        else:
+            status = None
+
+        was_unavailable = sensor.key in self._unavailable_sensors
+        if status is not None:
+            if not was_unavailable:
+                self._unavailable_sensors.add(sensor.key)
+                LOGGER.warning(
+                    "%s (%s) is %s; no new points will be written until it "
+                    "reports a value again",
+                    sensor.key,
+                    sensor.entity_id,
+                    status,
+                )
+        elif was_unavailable:
+            self._unavailable_sensors.discard(sensor.key)
+            LOGGER.info("%s (%s) is reporting again", sensor.key, sensor.entity_id)
+
     async def _handle_state_change(self, event: Event) -> None:
         """Handle a new state."""
         entity_id = event.data["entity_id"]
@@ -192,6 +237,7 @@ class SensorManager:
             return
 
         new_state: State | None = event.data.get("new_state")
+        self._check_availability(sensor, new_state)
         if sensor.key in FORECAST_SENSOR_KEYS:
             await self._queue_forecast_points(sensor, new_state)
             return
@@ -245,6 +291,7 @@ class SensorManager:
                 continue
 
             current_state = self._hass.states.get(sensor.entity_id)
+            self._check_availability(sensor, current_state)
             value = self._state_to_value(current_state)
             if value is None:
                 continue
@@ -312,11 +359,9 @@ class SensorManager:
         if sensor.entity_id.startswith("weather."):
             series = await self._weather_temperature_series(sensor.entity_id)
         else:
-            value_key = (
-                "temperature" if sensor.key == "OUTDOOR_TEMP_FORECAST" else sensor.field
-            )
+            value_key = FORECAST_ATTRIBUTE_VALUE_KEYS.get(sensor.key, (sensor.field,))
             series = self._attribute_forecast_series(
-                state.attributes.get("forecast"),
+                self._forecast_attribute_list(state),
                 value_key=value_key,
             )
 
@@ -370,13 +415,35 @@ class SensorManager:
         return series
 
     @staticmethod
+    def _forecast_attribute_list(state: State) -> Any:
+        """Return the first non-empty forecast time series attribute, if any."""
+        for name in FORECAST_ATTRIBUTE_NAMES:
+            candidate = state.attributes.get(name)
+            if isinstance(candidate, list) and candidate:
+                return candidate
+        return None
+
+    @staticmethod
+    def _normalize_value_keys(
+        value_key: str | tuple[str | tuple[str, float], ...],
+    ) -> list[tuple[str, float]]:
+        """Normalize the value_key shorthand forms into (key, multiplier) pairs."""
+        if isinstance(value_key, str):
+            return [(value_key, 1)]
+        return [
+            entry if isinstance(entry, tuple) else (entry, 1) for entry in value_key
+        ]
+
+    @staticmethod
     def _attribute_forecast_series(
         forecast_list: Any,
         *,
-        value_key: str,
+        value_key: str | tuple[str | tuple[str, float], ...],
     ) -> list[tuple[datetime, Any]]:
         if not isinstance(forecast_list, list):
             return []
+
+        value_keys = SensorManager._normalize_value_keys(value_key)
 
         series: list[tuple[datetime, Any]] = []
         for item in forecast_list:
@@ -384,7 +451,7 @@ class SensorManager:
                 continue
 
             raw_time = None
-            for key in ("datetime", "time", "period_end"):
+            for key in ("datetime", "time", "period_end", "period_start"):
                 candidate = item.get(key)
                 if candidate:
                     raw_time = candidate
@@ -392,9 +459,23 @@ class SensorManager:
             if raw_time is None:
                 continue
 
-            when = dt_util.parse_datetime(raw_time)
-            value = item.get(value_key)
-            if when is not None and value is not None:
+            value = None
+            for key, multiplier in value_keys:
+                candidate = item.get(key)
+                if candidate is not None:
+                    value = candidate * multiplier if multiplier != 1 else candidate
+                    break
+            if value is None:
+                continue
+
+            # Some sources (e.g. ha-solcast-solar) already provide a datetime
+            # object here instead of an ISO string.
+            when = (
+                raw_time
+                if isinstance(raw_time, datetime)
+                else dt_util.parse_datetime(raw_time)
+            )
+            if when is not None:
                 series.append((dt_util.as_utc(when), value))
 
         return series
@@ -413,6 +494,17 @@ class SensorManager:
             point.field(item.sensor.field, item.value)
             point.time(item.timestamp, WritePrecision.S)
             points.append(point)
+            # Logged before the write attempt so it's visible even on failure -
+            # enable debug logging for this integration to see exactly what
+            # gets sent to InfluxDB.
+            LOGGER.debug(
+                "Influx point: sensor=%s measurement=%s field=%s value=%r timestamp=%s",
+                item.sensor.key,
+                item.sensor.measurement,
+                item.sensor.field,
+                item.value,
+                item.timestamp.isoformat(),
+            )
 
         try:
             await self._client.async_write_batch(points)
@@ -425,6 +517,8 @@ class SensorManager:
                 len(self._pending),
                 err,
             )
+        else:
+            LOGGER.debug("Influx batch write succeeded: %d point(s) sent", len(points))
 
     @staticmethod
     def _coerce_value(value: Any, data_type: str) -> Any | None:

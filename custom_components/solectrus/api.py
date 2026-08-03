@@ -28,6 +28,22 @@ _HTTP_FORBIDDEN = 403
 _HTTP_NOT_FOUND = 404
 
 
+def _normalize_url(url: str) -> str:
+    """
+    Ensure the URL has an explicit scheme.
+
+    A bare host[:port] (no "://") is otherwise passed straight to urllib3,
+    which emits a FutureWarning and will be a hard error in urllib3 v3.
+    Default to http since InfluxDB is typically run on the same internal
+    network as Home Assistant; users who need TLS specify "https://"
+    explicitly and can then toggle the verify_ssl option.
+    """
+    stripped = url.strip()
+    if "://" not in stripped:
+        return f"http://{stripped}"
+    return stripped
+
+
 def _column_type_to_label(data_type: str) -> str:
     """Map a Flux column data_type annotation to our internal label."""
     if data_type == "boolean":
@@ -58,13 +74,13 @@ class SolectrusInfluxClient:
         self, url: str, token: str, org: str, bucket: str, *, verify_ssl: bool = True
     ) -> None:
         """Create the Influx client wrapper."""
-        self._url = url
+        self._url = _normalize_url(url)
         self._token = token
         self._org = org
         self._bucket = bucket
         self._client: InfluxDBClient | None = None
         self._write_api: WriteApi | None = None
-        self._ssl = not url.lower().startswith("http://")
+        self._ssl = not self._url.lower().startswith("http://")
         self._verify_ssl = bool(verify_ssl) and self._ssl
 
     async def async_validate_connection(self) -> None:

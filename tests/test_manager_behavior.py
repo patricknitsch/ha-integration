@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from influxdb_client import Point
 
 from custom_components.solectrus.api import SolectrusInfluxError
@@ -226,6 +227,49 @@ class TestFlushBatch:
         # The newer value (2000) should be preserved, not overwritten by the old (1500)
         assert mgr._pending[key].value == 2000
 
+    @pytest.mark.asyncio
+    async def test_logs_each_point_at_debug_level(self, caplog):
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+        sensor = _sensor()
+        mgr = _manager([sensor], client=client)
+
+        mgr._queue_point(sensor, 1500, timestamp=FIXED_NOW)
+
+        with caplog.at_level(logging.DEBUG):
+            await mgr._flush_batch(FIXED_NOW)
+
+        debug_messages = [
+            r.message for r in caplog.records if r.levelno == logging.DEBUG
+        ]
+        point_logs = [m for m in debug_messages if m.startswith("Influx point:")]
+        assert len(point_logs) == 1
+        assert "sensor=INVERTER_POWER" in point_logs[0]
+        assert "measurement=inverter" in point_logs[0]
+        assert "field=power" in point_logs[0]
+        assert "value=1500" in point_logs[0]
+        assert any("succeeded: 1 point" in m for m in debug_messages)
+
+    @pytest.mark.asyncio
+    async def test_logs_points_even_when_write_fails(self, caplog):
+        client = MagicMock()
+        client.async_write_batch = AsyncMock(
+            side_effect=SolectrusInfluxError("write failed")
+        )
+        sensor = _sensor()
+        mgr = _manager([sensor], client=client)
+
+        mgr._queue_point(sensor, 1500, timestamp=FIXED_NOW)
+
+        with caplog.at_level(logging.DEBUG):
+            await mgr._flush_batch(FIXED_NOW)
+
+        debug_messages = [
+            r.message for r in caplog.records if r.levelno == logging.DEBUG
+        ]
+        assert any(m.startswith("Influx point:") for m in debug_messages)
+        assert any("batch write failed" in m for m in debug_messages)
+
 
 class TestHandleStateChange:
     """Tests for _handle_state_change."""
@@ -387,6 +431,82 @@ class TestHandleStateChange:
         await mgr._handle_state_change(event)
 
         assert len(mgr._pending) == 2
+
+    @pytest.mark.asyncio
+    async def test_forecast_sensor_reads_pvnode_power_key(self):
+        """pvnode's power forecast attribute uses "watts", not "power"."""
+        sensor = _sensor(key="INVERTER_POWER_FORECAST", entity_id="sensor.forecast")
+        mgr = _manager([sensor])
+
+        new_state = MagicMock()
+        new_state.attributes = {
+            "forecast": [
+                {"datetime": "2024-06-15T13:00:00+00:00", "watts": 1500},
+                {"datetime": "2024-06-15T14:00:00+00:00", "watts": 1800},
+            ]
+        }
+
+        event = MagicMock()
+        event.data = {"entity_id": "sensor.forecast", "new_state": new_state}
+
+        await mgr._handle_state_change(event)
+
+        assert len(mgr._pending) == 2
+        values = {point.value for point in mgr._pending.values()}
+        assert values == {1500, 1800}
+
+    @pytest.mark.asyncio
+    async def test_forecast_sensor_reads_pvnode_clearsky_key(self):
+        """pvnode's clear-sky forecast attribute uses "watts_clearsky"."""
+        sensor = _sensor(
+            key="INVERTER_POWER_FORECAST_CLEARSKY", entity_id="sensor.forecast_clearsky"
+        )
+        mgr = _manager([sensor])
+
+        new_state = MagicMock()
+        new_state.attributes = {
+            "forecast": [
+                {"datetime": "2024-06-15T13:00:00+00:00", "watts_clearsky": 2000},
+            ]
+        }
+
+        event = MagicMock()
+        event.data = {"entity_id": "sensor.forecast_clearsky", "new_state": new_state}
+
+        await mgr._handle_state_change(event)
+
+        assert len(mgr._pending) == 1
+        point = next(iter(mgr._pending.values()))
+        assert point.value == 2000
+
+    @pytest.mark.asyncio
+    async def test_forecast_sensor_reads_solcast_detailed_forecast(self):
+        """ha-solcast-solar uses period_start (datetime) / pv_estimate (kW)."""
+        sensor = _sensor(key="INVERTER_POWER_FORECAST", entity_id="sensor.forecast")
+        mgr = _manager([sensor])
+
+        new_state = MagicMock()
+        new_state.attributes = {
+            # Solcast's time series lives under "detailedForecast"/
+            # "detailedHourly", not "forecast" - left empty here to prove
+            # the fallback attribute name is actually used.
+            "forecast": [],
+            "detailedForecast": [
+                {
+                    "period_start": datetime(2024, 6, 15, 13, 0, 0, tzinfo=UTC),
+                    "pv_estimate": 1.5,
+                },
+            ],
+        }
+
+        event = MagicMock()
+        event.data = {"entity_id": "sensor.forecast", "new_state": new_state}
+
+        await mgr._handle_state_change(event)
+
+        assert len(mgr._pending) == 1
+        point = next(iter(mgr._pending.values()))
+        assert point.value == 1500.0
 
 
 class TestHeartbeat:
@@ -564,6 +684,66 @@ class TestAsyncStartStop:
         client.async_write_batch.assert_awaited_once()
         points = client.async_write_batch.call_args[0][0]
         assert len(points) == 1
+
+    @pytest.mark.asyncio
+    async def test_start_seeds_forecast_from_current_state(self):
+        """Forecast sensors must not wait for their next state change to seed.
+
+        Sources like pvnode can poll on a long interval, so relying solely on
+        the next state_changed event can leave InfluxDB empty for a long time
+        after every restart even though the source already has data now.
+        """
+        sensor = _sensor(key="INVERTER_POWER_FORECAST", entity_id="sensor.forecast")
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+        mgr = _manager([sensor], client=client)
+
+        mock_state = MagicMock()
+        mock_state.attributes = {
+            "forecast": [
+                {"datetime": "2024-06-15T13:00:00+00:00", "watts": 1500},
+                {"datetime": "2024-06-15T14:00:00+00:00", "watts": 1800},
+            ]
+        }
+        mgr._hass.states.get.return_value = mock_state
+
+        with (
+            patch(
+                "custom_components.solectrus.manager.async_track_state_change_event",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.solectrus.manager.async_track_time_interval",
+                return_value=MagicMock(),
+            ),
+        ):
+            await mgr.async_start()
+
+        client.async_write_batch.assert_awaited_once()
+        points = client.async_write_batch.call_args[0][0]
+        assert len(points) == 2
+
+    @pytest.mark.asyncio
+    async def test_start_skips_forecast_seed_when_state_missing(self):
+        sensor = _sensor(key="INVERTER_POWER_FORECAST", entity_id="sensor.forecast")
+        client = MagicMock()
+        client.async_write_batch = AsyncMock()
+        mgr = _manager([sensor], client=client)
+        mgr._hass.states.get.return_value = None
+
+        with (
+            patch(
+                "custom_components.solectrus.manager.async_track_state_change_event",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.solectrus.manager.async_track_time_interval",
+                return_value=MagicMock(),
+            ),
+        ):
+            await mgr.async_start()
+
+        client.async_write_batch.assert_not_called()
 
 
 class TestResolveDataTypes:
@@ -779,3 +959,149 @@ class TestValueRangeValidation:
         assert len(warning_messages) == 1
         assert "out of range" in warning_messages[0].message
         assert sensor.entity_id in warning_messages[0].message
+
+
+class TestCheckAvailability:
+    """Tests for _check_availability."""
+
+    def test_warns_when_state_missing(self, caplog):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+
+        with caplog.at_level(logging.WARNING):
+            mgr._check_availability(sensor, None)
+
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "missing" in warnings[0]
+        assert sensor.entity_id in warnings[0]
+        assert sensor.key in mgr._unavailable_sensors
+
+    def test_warns_when_unavailable(self, caplog):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+        state = MagicMock(state=STATE_UNAVAILABLE)
+
+        with caplog.at_level(logging.WARNING):
+            mgr._check_availability(sensor, state)
+
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "unavailable" in warnings[0]
+
+    def test_warns_when_unknown(self, caplog):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+        state = MagicMock(state=STATE_UNKNOWN)
+
+        with caplog.at_level(logging.WARNING):
+            mgr._check_availability(sensor, state)
+
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "unknown" in warnings[0]
+
+    def test_no_warning_for_available_state(self, caplog):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+        state = MagicMock(state="1500")
+
+        with caplog.at_level(logging.WARNING):
+            mgr._check_availability(sensor, state)
+
+        assert not any(r.levelno == logging.WARNING for r in caplog.records)
+        assert sensor.key not in mgr._unavailable_sensors
+
+    def test_warns_only_once_while_still_unavailable(self, caplog):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+        state = MagicMock(state=STATE_UNAVAILABLE)
+
+        with caplog.at_level(logging.WARNING):
+            mgr._check_availability(sensor, state)
+            mgr._check_availability(sensor, state)
+            mgr._check_availability(sensor, state)
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+
+    def test_logs_recovery_once_available_again(self, caplog):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+        unavailable = MagicMock(state=STATE_UNAVAILABLE)
+        recovered = MagicMock(state="1500")
+
+        with caplog.at_level(logging.INFO):
+            mgr._check_availability(sensor, unavailable)
+            mgr._check_availability(sensor, recovered)
+
+        info_messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        assert len(info_messages) == 1
+        assert "reporting again" in info_messages[0]
+        assert sensor.key not in mgr._unavailable_sensors
+
+    def test_warns_again_after_recovering_and_dropping_again(self, caplog):
+        """Each new outage should be reported, not just the first ever one."""
+        sensor = _sensor()
+        mgr = _manager([sensor])
+        unavailable = MagicMock(state=STATE_UNAVAILABLE)
+        recovered = MagicMock(state="1500")
+
+        with caplog.at_level(logging.WARNING):
+            mgr._check_availability(sensor, unavailable)
+            mgr._check_availability(sensor, recovered)
+            mgr._check_availability(sensor, unavailable)
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 2
+
+    @pytest.mark.asyncio
+    async def test_handle_state_change_warns_and_skips_point(self, caplog):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+
+        event = MagicMock()
+        event.data = {
+            "entity_id": sensor.entity_id,
+            "new_state": MagicMock(state=STATE_UNAVAILABLE),
+        }
+
+        with caplog.at_level(logging.WARNING):
+            await mgr._handle_state_change(event)
+
+        assert any(
+            r.levelno == logging.WARNING and "unavailable" in r.message
+            for r in caplog.records
+        )
+        assert len(mgr._pending) == 0
+
+    @pytest.mark.asyncio
+    async def test_handle_state_change_warns_for_forecast_sensor(self, caplog):
+        sensor = _sensor(key="INVERTER_POWER_FORECAST", entity_id="sensor.forecast")
+        mgr = _manager([sensor])
+
+        event = MagicMock()
+        event.data = {
+            "entity_id": sensor.entity_id,
+            "new_state": MagicMock(state=STATE_UNAVAILABLE, attributes={}),
+        }
+
+        with caplog.at_level(logging.WARNING):
+            await mgr._handle_state_change(event)
+
+        assert any(
+            r.levelno == logging.WARNING and "unavailable" in r.message
+            for r in caplog.records
+        )
+
+    def test_heartbeat_does_not_repeat_warning(self, caplog):
+        sensor = _sensor()
+        mgr = _manager([sensor])
+        mgr._hass.states.get.return_value = MagicMock(state=STATE_UNAVAILABLE)
+
+        with caplog.at_level(logging.WARNING):
+            mgr._heartbeat(FIXED_NOW)
+            mgr._heartbeat(FIXED_NOW)
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
